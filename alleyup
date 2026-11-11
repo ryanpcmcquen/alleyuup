@@ -4,7 +4,7 @@ set -uo pipefail
 # Ensure standard user and Homebrew binary paths are available (Apple Silicon & Intel Mac)
 export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
-ALLEYUP_VERSION="1.0.6"
+ALLEYUP_VERSION="1.0.7"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -54,6 +54,12 @@ ALLEYUP_CONFIG_MAPPINGS=(
   "alleyup.conf:$HOME/.config/alleyup/config"
   "config.fish:$HOME/.config/fish/config.fish"
   "openclaw.fish:$HOME/.config/fish/conf.d/openclaw.fish"
+  "config.nu:$HOME/.config/nushell/config.nu"
+  "env.nu:$HOME/.config/nushell/env.nu"
+  "login.nu:$HOME/.config/nushell/login.nu"
+  "mac_config.nu:$HOME/Library/Application Support/nushell/config.nu"
+  "mac_env.nu:$HOME/Library/Application Support/nushell/env.nu"
+  "mac_login.nu:$HOME/Library/Application Support/nushell/login.nu"
   "starship.toml:$HOME/.config/starship.toml"
   "zshrc:$HOME/.zshrc"
   "zprofile:$HOME/.zprofile"
