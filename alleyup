@@ -1,0 +1,431 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# Ensure standard user and Homebrew binary paths are available
+export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+
+BOLD="\033[1m"
+BLUE="\033[1;34m"
+GREEN="\033[1;32m"
+YELLOW="\033[1;33m"
+RED="\033[1;31m"
+RESET="\033[0m"
+
+CONFIG_FILE="${ALLEYUP_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/alleyup/config}"
+
+# Default step toggles (1 = enabled, 0 = disabled).
+# Any of these can be overridden in ~/.config/alleyup/config (or via environment variables).
+: "${ALLEYUP_SELF_UPDATE:=1}"
+: "${ALLEYUP_BREW:=1}"
+: "${ALLEYUP_BREW_FORMULA:=1}"
+: "${ALLEYUP_BREW_CASK:=1}"
+: "${ALLEYUP_BREW_GREEDY:=1}"
+: "${ALLEYUP_BREW_CLEANUP:=1}"
+: "${ALLEYUP_MAS:=1}"
+: "${ALLEYUP_AGY:=1}"
+: "${ALLEYUP_OPENCODE_STANDALONE:=1}"
+: "${ALLEYUP_OPENCLAW:=1}"
+: "${ALLEYUP_NPM:=1}"
+: "${ALLEYUP_PNPM:=1}"
+: "${ALLEYUP_RUSTUP:=1}"
+: "${ALLEYUP_UV:=1}"
+: "${ALLEYUP_PIPX:=1}"
+: "${ALLEYUP_GH_EXT:=1}"
+: "${ALLEYUP_BREWFILE:=1}"
+: "${ALLEYUP_SHELL:=1}"
+: "${ALLEYUP_MACOS:=1}"
+
+# Optional exclusion arrays (can be populated in ~/.config/alleyup/config)
+ALLEYUP_BREW_IGNORE=()
+ALLEYUP_CASK_IGNORE=()
+ALLEYUP_NPM_IGNORE=()
+
+FAILED_STEPS=()
+
+resolve_self_repo() {
+  local source="${BASH_SOURCE[0]}"
+  while [[ -L "$source" ]]; do
+    local dir
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    [[ "$source" != /* ]] && source="$dir/$source"
+  done
+  local candidate
+  candidate="$(cd -P "$(dirname "$source")" && pwd)"
+  if [[ -d "$candidate/.git" ]]; then
+    printf "%s\n" "$candidate"
+    return 0
+  fi
+  return 1
+}
+
+write_default_config() {
+  local file="$1"
+  mkdir -p "$(dirname "$file")"
+  cat <<'EOF' > "$file"
+# alleyup per-machine configuration
+# Tracked via `dots` (symlinked from ~/.config/alleyup/config -> <machine-gist>/alleyup.conf)
+#
+# Set any step to 0 to disable it on this machine if something is broken or unwanted.
+
+ALLEYUP_SELF_UPDATE=1          # Pull latest alleyup & dots from the tools Gist
+ALLEYUP_BREW=1                 # Run Homebrew updates
+ALLEYUP_BREW_FORMULA=1         # Upgrade Homebrew formulas
+ALLEYUP_BREW_CASK=1            # Upgrade Homebrew casks
+ALLEYUP_BREW_GREEDY=1          # Pass --greedy when upgrading casks
+ALLEYUP_BREW_CLEANUP=1         # Run brew cleanup --prune=all
+ALLEYUP_MAS=1                  # Upgrade Mac App Store apps via mas
+ALLEYUP_AGY=1                  # Upgrade Antigravity CLI (agy)
+ALLEYUP_OPENCODE_STANDALONE=1  # Upgrade standalone ~/.opencode/bin/opencode (if present)
+ALLEYUP_OPENCLAW=1             # Upgrade OpenClaw CLI (if not app-managed)
+ALLEYUP_NPM=1                  # Upgrade global npm packages (skips local file: links)
+ALLEYUP_PNPM=1                 # Upgrade global pnpm packages
+ALLEYUP_RUSTUP=1               # Upgrade Rust toolchains via rustup
+ALLEYUP_UV=1                   # Upgrade uv tools
+ALLEYUP_PIPX=1                 # Upgrade pipx packages
+ALLEYUP_GH_EXT=1               # Upgrade GitHub CLI extensions
+ALLEYUP_BREWFILE=1             # Refresh tracked Brewfile via `dots brewfile`
+ALLEYUP_SHELL=1                # Update Fisher plugins and Fish completions
+ALLEYUP_MACOS=1                # Run macOS softwareupdate -i -a
+
+# Package exclusion lists (space-separated inside parentheses)
+# Useful when a specific formula, cask, or global npm package is broken on this machine:
+ALLEYUP_BREW_IGNORE=()
+ALLEYUP_CASK_IGNORE=()
+ALLEYUP_NPM_IGNORE=()
+
+# Optional hook functions (uncomment to override or extend behavior on this machine):
+#
+# alleyup_before() {
+#   # Commands to run before standard upgrade steps
+#   :
+# }
+#
+# alleyup_after() {
+#   # Commands to run after standard upgrade steps
+#   :
+# }
+EOF
+}
+
+usage() {
+  local self_repo="(standalone)"
+  if self_repo="$(resolve_self_repo 2>/dev/null)"; then
+    :
+  fi
+  cat <<EOF
+Usage: alleyup [options]
+
+Upgrade local packages, casks, App Store apps, CLI tools, and macOS software.
+  Tools repo:   $self_repo
+  Local config: $CONFIG_FILE
+
+Options:
+  --no-macos, --fast   Skip macOS system software updates (softwareupdate)
+  --no-self-update     Skip pulling latest alleyup & dots from the tools Gist
+  --config, --edit     Open $CONFIG_FILE in \$EDITOR (creates default if missing)
+  --print-config       Print the path and contents of $CONFIG_FILE
+  -h, --help           Show this help message
+EOF
+}
+
+# Load per-machine config file before parsing CLI flags so flags take precedence
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+
+for arg in "$@"; do
+  case "$arg" in
+    --no-macos|--fast)
+      ALLEYUP_MACOS=0
+      ;;
+    --no-self-update)
+      ALLEYUP_SELF_UPDATE=0
+      ;;
+    --config|--edit)
+      if [[ ! -f "$CONFIG_FILE" ]]; then
+        write_default_config "$CONFIG_FILE"
+        printf "${GREEN}✓ Created default config at %s${RESET}\n" "$CONFIG_FILE"
+      fi
+      ${EDITOR:-vi} "$CONFIG_FILE"
+      exit 0
+      ;;
+    --print-config)
+      printf "${BLUE}# %s${RESET}\n" "$CONFIG_FILE"
+      if [[ -f "$CONFIG_FILE" ]]; then
+        cat "$CONFIG_FILE"
+      else
+        printf "(No config file found at %s; run 'alleyup --config' to create one)\n" "$CONFIG_FILE"
+      fi
+      exit 0
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf "${RED}Unknown option: %s${RESET}\n\n" "$arg" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+section() {
+  printf "\n${BLUE}==> %s${RESET}\n" "$1"
+}
+
+run_step() {
+  local name="$1"
+  shift
+  section "$name"
+  if "$@"; then
+    printf "${GREEN}✓ %s complete${RESET}\n" "$name"
+  else
+    local status=$?
+    printf "${YELLOW}⚠ %s exited with status %d${RESET}\n" "$name" "$status" >&2
+    FAILED_STEPS+=("$name")
+  fi
+}
+
+in_array() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+self_update_tools() {
+  local repo
+  if repo="$(resolve_self_repo)"; then
+    if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+      if [[ -z "$(git -C "$repo" status --porcelain 2>/dev/null)" ]]; then
+        local branch
+        branch="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+        git -C "$repo" pull --rebase --quiet origin "$branch"
+        printf "Updated tools repo (%s)\n" "$repo"
+      else
+        printf "Tools repo (%s) has local uncommitted changes; skipping pull.\n" "$repo"
+      fi
+    fi
+  fi
+}
+
+update_homebrew() {
+  brew update
+
+  if (( ALLEYUP_BREW_FORMULA == 1 )); then
+    if (( ${#ALLEYUP_BREW_IGNORE[@]} > 0 )); then
+      local formulas=()
+      while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        if in_array "$f" "${ALLEYUP_BREW_IGNORE[@]}"; then
+          printf "Skipping ignored formula: %s\n" "$f"
+        else
+          formulas+=("$f")
+        fi
+      done < <(brew outdated --formula --quiet)
+      if (( ${#formulas[@]} > 0 )); then
+        brew upgrade --formula "${formulas[@]}"
+      else
+        printf "No non-ignored formulas to upgrade.\n"
+      fi
+    else
+      brew upgrade --formula
+    fi
+  fi
+
+  if (( ALLEYUP_BREW_CASK == 1 )); then
+    local greedy_flag=()
+    (( ALLEYUP_BREW_GREEDY == 1 )) && greedy_flag=(--greedy)
+
+    if (( ${#ALLEYUP_CASK_IGNORE[@]} > 0 )); then
+      local casks=()
+      while IFS= read -r c; do
+        [[ -z "$c" ]] && continue
+        if in_array "$c" "${ALLEYUP_CASK_IGNORE[@]}"; then
+          printf "Skipping ignored cask: %s\n" "$c"
+        else
+          casks+=("$c")
+        fi
+      done < <(brew outdated --cask "${greedy_flag[@]}" --quiet)
+      if (( ${#casks[@]} > 0 )); then
+        brew upgrade --cask "${greedy_flag[@]}" "${casks[@]}"
+      else
+        printf "No non-ignored casks to upgrade.\n"
+      fi
+    else
+      brew upgrade --cask "${greedy_flag[@]}"
+    fi
+  fi
+
+  if (( ALLEYUP_BREW_CLEANUP == 1 )); then
+    brew cleanup --prune=all
+  fi
+}
+
+update_npm_globals() {
+  local pkgs=()
+  while IFS= read -r pkg; do
+    [[ -z "$pkg" ]] && continue
+    if (( ${#ALLEYUP_NPM_IGNORE[@]} > 0 )) && in_array "$pkg" "${ALLEYUP_NPM_IGNORE[@]}"; then
+      printf "Skipping ignored global npm package: %s\n" "$pkg"
+      continue
+    fi
+    pkgs+=("$pkg")
+  done < <(
+    npm list -g --depth=0 --json 2>/dev/null | node -e '
+      let data = "";
+      process.stdin.on("data", chunk => data += chunk);
+      process.stdin.on("end", () => {
+        try {
+          const deps = JSON.parse(data).dependencies || {};
+          for (const [name, info] of Object.entries(deps)) {
+            if (info && typeof info.resolved === "string" && info.resolved.startsWith("file:")) {
+              continue;
+            }
+            console.log(name);
+          }
+        } catch {}
+      });
+    '
+  )
+
+  if (( ${#pkgs[@]} > 0 )); then
+    printf "Updating global npm packages: %s\n" "${pkgs[*]}"
+    npm install -g "${pkgs[@]/%/@latest}"
+  else
+    printf "No non-linked global npm packages to update.\n"
+  fi
+}
+
+update_pnpm_globals() {
+  local out
+  out="$(pnpm list -g --depth=0 2>/dev/null || true)"
+  if [[ -n "$out" ]] && [[ "$out" != *"No global packages found"* ]]; then
+    pnpm update -g --latest
+  else
+    printf "No global pnpm packages installed.\n"
+  fi
+}
+
+update_shell() {
+  if command -v fish >/dev/null 2>&1; then
+    if fish -c 'type -q fisher' 2>/dev/null; then
+      printf "Updating Fisher plugins...\n"
+      fish -c 'fisher update'
+    fi
+    printf "Updating Fish manpage completions...\n"
+    fish -c 'fish_update_completions'
+  fi
+}
+
+update_brewfile() {
+  if command -v dots >/dev/null 2>&1; then
+    dots brewfile
+  elif [[ -n "${DOTFILES_GIST_DIR:-}" ]] && [[ -d "$DOTFILES_GIST_DIR/.git" ]]; then
+    brew bundle dump --file="$DOTFILES_GIST_DIR/Brewfile" --force
+  fi
+}
+
+# 0. Self-update alleyup & dots from shared tools Gist
+if (( ALLEYUP_SELF_UPDATE == 1 )) && resolve_self_repo >/dev/null 2>&1; then
+  run_step "Self-Update (alleyup & dots)" self_update_tools
+fi
+
+# Run user pre-hook if defined in ~/.config/alleyup/config
+if declare -F alleyup_before >/dev/null 2>&1; then
+  run_step "Custom Pre-Upgrade Hook (alleyup_before)" alleyup_before
+fi
+
+# 1. Homebrew (Formulas, Casks, Cleanup)
+if (( ALLEYUP_BREW == 1 )) && command -v brew >/dev/null 2>&1; then
+  if declare -F alleyup_override_homebrew >/dev/null 2>&1; then
+    run_step "Homebrew (Custom Override)" alleyup_override_homebrew
+  else
+    run_step "Homebrew (Formulas, Casks & Cleanup)" update_homebrew
+  fi
+fi
+
+# 2. Mac App Store (mas)
+if (( ALLEYUP_MAS == 1 )) && command -v mas >/dev/null 2>&1; then
+  run_step "Mac App Store (mas)" mas upgrade
+fi
+
+# 3. Standalone CLI Tools
+if (( ALLEYUP_AGY == 1 )) && command -v agy >/dev/null 2>&1; then
+  run_step "Antigravity CLI (agy)" agy update
+fi
+
+if (( ALLEYUP_OPENCODE_STANDALONE == 1 )) && [[ -x "$HOME/.opencode/bin/opencode" ]]; then
+  run_step "OpenCode (standalone)" "$HOME/.opencode/bin/opencode" upgrade
+fi
+
+if (( ALLEYUP_OPENCLAW == 1 )) && command -v openclaw >/dev/null 2>&1; then
+  if ! openclaw update status 2>/dev/null | grep -q "Managed by OpenClaw.app"; then
+    run_step "OpenClaw CLI" openclaw update --yes
+  fi
+fi
+
+# 4. Dev Toolchains & Global Packages
+if (( ALLEYUP_NPM == 1 )) && command -v npm >/dev/null 2>&1; then
+  if declare -F alleyup_override_npm >/dev/null 2>&1; then
+    run_step "Global npm Packages (Custom Override)" alleyup_override_npm
+  else
+    run_step "Global npm Packages" update_npm_globals
+  fi
+fi
+
+if (( ALLEYUP_PNPM == 1 )) && command -v pnpm >/dev/null 2>&1; then
+  run_step "Global pnpm Packages" update_pnpm_globals
+fi
+
+if (( ALLEYUP_RUSTUP == 1 )) && command -v rustup >/dev/null 2>&1; then
+  run_step "Rust Toolchains (rustup)" rustup update
+fi
+
+if (( ALLEYUP_UV == 1 )) && command -v uv >/dev/null 2>&1; then
+  run_step "uv Tools" uv tool upgrade --all
+fi
+
+if (( ALLEYUP_PIPX == 1 )) && command -v pipx >/dev/null 2>&1; then
+  run_step "pipx Packages" pipx upgrade-all
+fi
+
+if (( ALLEYUP_GH_EXT == 1 )) && command -v gh >/dev/null 2>&1; then
+  if [[ -n "$(gh extension list 2>/dev/null || true)" ]]; then
+    run_step "GitHub CLI Extensions" gh extension upgrade --all
+  fi
+fi
+
+# 5. Refresh tracked Brewfile in machine config repo
+if (( ALLEYUP_BREWFILE == 1 )) && command -v brew >/dev/null 2>&1 && { command -v dots >/dev/null 2>&1 || [[ -n "${DOTFILES_GIST_DIR:-}" ]]; }; then
+  run_step "Refresh Tracked Brewfile" update_brewfile
+fi
+
+# 6. Shell & Completions
+if (( ALLEYUP_SHELL == 1 )); then
+  run_step "Shell Plugins & Completions" update_shell
+fi
+
+# 7. macOS System Software
+if (( ALLEYUP_MACOS == 1 )) && command -v softwareupdate >/dev/null 2>&1; then
+  run_step "macOS Software Updates" softwareupdate -i -a
+fi
+
+# Run user post-hook if defined in ~/.config/alleyup/config
+if declare -F alleyup_after >/dev/null 2>&1; then
+  run_step "Custom Post-Upgrade Hook (alleyup_after)" alleyup_after
+fi
+
+printf "\n"
+if (( ${#FAILED_STEPS[@]} > 0 )); then
+  printf "${YELLOW}Finished with warnings in: %s${RESET}\n" "${FAILED_STEPS[*]}"
+  exit 1
+else
+  printf "${BOLD}${GREEN}✨ All upgrades completed!${RESET}\n"
+fi
