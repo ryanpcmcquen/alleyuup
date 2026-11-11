@@ -4,7 +4,7 @@ set -uo pipefail
 # Ensure standard user and Homebrew binary paths are available (Apple Silicon & Intel Mac)
 export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
-ALLEYUP_VERSION="1.0.3"
+ALLEYUP_VERSION="1.0.4"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -43,9 +43,21 @@ REPO_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dots/repo"
 : "${ALLEYUP_CODE_REPOS:=1}"
 : "${ALLEYUP_CODE_DIR:=$HOME/code}"
 : "${ALLEYUP_BREWFILE:=1}"
+: "${ALLEYUP_REPO_SYNC:=1}"
 : "${ALLEYUP_SHELL:=1}"
 : "${ALLEYUP_MACOS:=1}"
 : "${ALLEYUP_MACOS_MAJOR:=0}"
+
+# Tracked machine config files (<repo_filename>:<target_path_in_home>)
+ALLEYUP_CONFIG_MAPPINGS=(
+  "alleyup.conf:$HOME/.config/alleyup/config"
+  "config.fish:$HOME/.config/fish/config.fish"
+  "openclaw.fish:$HOME/.config/fish/conf.d/openclaw.fish"
+  "zshrc:$HOME/.zshrc"
+  "zprofile:$HOME/.zprofile"
+  "gitconfig:$HOME/.gitconfig"
+  "init.lua:$HOME/.hammerspoon/init.lua"
+)
 
 # Default branch names for ~/code repo checks (can be overridden in ~/.config/alleyup/config)
 ALLEYUP_DEFAULT_BRANCHES=("main" "master" "dev" "staging")
@@ -100,6 +112,7 @@ configure_machine_repo() {
   local input="${1:-}"
   if command -v dots >/dev/null 2>&1; then
     dots repo "$input"
+    sync_machine_repo
     return $?
   fi
 
@@ -165,6 +178,7 @@ configure_machine_repo() {
   mkdir -p "$(dirname "$REPO_CONFIG_FILE")"
   printf "%s\n" "$target_dir" > "$REPO_CONFIG_FILE"
   printf "${GREEN}✓ Saved machine config repo:${RESET} %s (stored in %s)\n" "$target_dir" "$REPO_CONFIG_FILE"
+  sync_machine_repo
 }
 
 get_version_string() {
@@ -244,6 +258,7 @@ ALLEYUP_CODE_REPOS=1           # Walk git repos in ALLEYUP_CODE_DIR, pull, and r
 ALLEYUP_CODE_DIR="$HOME/code"  # Directory to scan for git repositories
 ALLEYUP_REPO_DIR=""            # Optional path to this machine's config/Brewfile git repo
 ALLEYUP_BREWFILE=1             # Refresh tracked Brewfile in machine config repo
+ALLEYUP_REPO_SYNC=1            # Collect local configs, commit, and push to machine config repo
 ALLEYUP_SHELL=1                # Update Fisher plugins and Fish completions
 ALLEYUP_MACOS=1                # Run macOS software updates (minor/patch & security updates)
 ALLEYUP_MACOS_MAJOR=0          # Allow major macOS version upgrades (0 = block major OS upgrades)
@@ -654,13 +669,68 @@ update_shell() {
   fi
 }
 
-update_brewfile() {
+sync_machine_repo() {
   local machine_repo
-  if machine_repo="$(get_machine_repo)"; then
+  if ! machine_repo="$(get_machine_repo)"; then
+    return 0
+  fi
+
+  # Ensure default alleyup config exists so it can be tracked
+  if [[ ! -e "$CONFIG_FILE" ]] && [[ ! -e "$machine_repo/alleyup.conf" ]]; then
+    write_default_config "$CONFIG_FILE"
+  fi
+
+  # 1. Collect and symlink local config files on this machine
+  local entry repo_name target source_path
+  for entry in "${ALLEYUP_CONFIG_MAPPINGS[@]}"; do
+    repo_name="${entry%%:*}"
+    target="${entry#*:}"
+    source_path="$machine_repo/$repo_name"
+
+    if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$source_path" ]]; then
+      continue
+    elif [[ -f "$target" ]] && [[ ! -L "$target" ]]; then
+      cp -a "$target" "$source_path"
+      ln -sfn "$source_path" "$target"
+      printf "Tracked & linked %s -> %s\n" "$target" "$source_path"
+    elif [[ ! -e "$target" ]] && [[ -f "$source_path" ]]; then
+      mkdir -p "$(dirname "$target")"
+      ln -sfn "$source_path" "$target"
+      printf "Linked %s -> %s\n" "$target" "$source_path"
+    fi
+  done
+
+  # 2. Dump Brewfile if enabled and Homebrew is installed
+  if (( ALLEYUP_BREWFILE == 1 )) && command -v brew >/dev/null 2>&1; then
     brew bundle dump --file="$machine_repo/Brewfile" --force
     printf "Updated %s/Brewfile\n" "$machine_repo"
-  elif command -v dots >/dev/null 2>&1; then
-    dots brewfile
+  fi
+
+  # 3. Commit and push to the machine config repo if it is a git repository
+  if [[ -d "$machine_repo/.git" ]]; then
+    # Remove default Gist placeholder file if real configs exist
+    if [[ -f "$machine_repo/gistfile1.txt" ]] && [[ "$(wc -c <"$machine_repo/gistfile1.txt" | tr -d ' ')" -le 20 ]]; then
+      git -C "$machine_repo" rm -f --quiet gistfile1.txt 2>/dev/null || rm -f "$machine_repo/gistfile1.txt"
+    fi
+
+    git -C "$machine_repo" add -A
+    local host
+    host="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || echo "mac")"
+    if ! git -C "$machine_repo" diff --cached --quiet; then
+      git -C "$machine_repo" commit -m "alleyup: sync configs & Brewfile ($host, $(date '+%Y-%m-%d %H:%M'))"
+    else
+      printf "No new config or Brewfile changes to commit in %s.\n" "$machine_repo"
+    fi
+
+    if git -C "$machine_repo" remote get-url origin >/dev/null 2>&1; then
+      local branch
+      branch="$(git -C "$machine_repo" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+      git -C "$machine_repo" pull --rebase --quiet origin "$branch" || true
+      if [[ -n "$(git -C "$machine_repo" status --porcelain -b 2>/dev/null | grep '^## .*\[ahead ')" ]] || ! git -C "$machine_repo" diff --quiet "origin/$branch" HEAD 2>/dev/null; then
+        git -C "$machine_repo" push origin "$branch"
+        printf "Pushed machine configs to %s (%s)\n" "$machine_repo" "$branch"
+      fi
+    fi
   fi
 }
 
@@ -827,9 +897,9 @@ if (( ALLEYUP_CODE_REPOS == 1 )); then
   run_step "Git Repositories ($ALLEYUP_CODE_DIR)" update_code_repos
 fi
 
-# 6. Refresh tracked Brewfile in machine config repo (only if a machine config repo is configured)
-if (( ALLEYUP_BREWFILE == 1 )) && command -v brew >/dev/null 2>&1 && get_machine_repo >/dev/null 2>&1; then
-  run_step "Refresh Tracked Brewfile" update_brewfile
+# 6. Collect local configs, refresh Brewfile, and push to machine config repo
+if (( ALLEYUP_REPO_SYNC == 1 )) && get_machine_repo >/dev/null 2>&1; then
+  run_step "Sync Machine Configs & Brewfile ($(get_machine_repo))" sync_machine_repo
 fi
 
 # 7. Shell & Completions
