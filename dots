@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.0.0"
+DOTS_VERSION="1.0.1"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -399,17 +399,12 @@ cmd_add() {
   fi
   local mapping_entry="${repo_name}:${abs_target/#$HOME/\$HOME}"
   if [[ -n "$dots_script" ]] && [[ -f "$dots_script" ]] && ! grep -Fq "\"$mapping_entry\"" "$dots_script"; then
-    DOTS_FILE="$dots_script" MAPPING_ENTRY="$mapping_entry" node -e '
-      const fs = require("fs");
-      const file = process.env.DOTS_FILE;
-      const entry = process.env.MAPPING_ENTRY;
-      let content = fs.readFileSync(file, "utf8");
-      content = content.replace(
-        /(MAPPINGS=\(\n(?:.*?\n)*?)(\))/,
-        `$1  "${entry}"\n$2`
-      );
-      fs.writeFileSync(file, content, "utf8");
-    '
+    local tmp_dots="${dots_script}.tmp.$$"
+    awk -v entry="  \"$mapping_entry\"" '
+      /^MAPPINGS=\(/ { in_map = 1 }
+      in_map && /^\)/ { print entry; in_map = 0 }
+      { print }
+    ' "$dots_script" > "$tmp_dots" && chmod +x "$tmp_dots" && mv "$tmp_dots" "$dots_script"
     printf "${GREEN}✓ Registered %s in dots MAPPINGS${RESET}\n" "$mapping_entry"
   fi
 }

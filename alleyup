@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Ensure standard user and Homebrew binary paths are available
-export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+# Ensure standard user and Homebrew binary paths are available (Apple Silicon & Intel Mac)
+export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
-ALLEYUP_VERSION="1.0.0"
+ALLEYUP_VERSION="1.0.1"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -364,30 +364,29 @@ ensure_node_via_nvm() {
 
 update_npm_globals() {
   local pkgs=()
-  while IFS= read -r pkg; do
-    [[ -z "$pkg" ]] && continue
+  local list_out
+  list_out="$(npm list -g --depth=0 --parseable 2>/dev/null || true)"
+
+  local root_dir=""
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if [[ -z "$root_dir" ]]; then
+      root_dir="$line"
+      continue
+    fi
+    # Skip symlinked local packages (equivalent to file: links)
+    if [[ -L "$line" ]]; then
+      continue
+    fi
+    local pkg="${line#"${root_dir}/node_modules/"}"
+    [[ -z "$pkg" || "$pkg" == "$line" ]] && continue
     if (( ${#ALLEYUP_NPM_IGNORE[@]} > 0 )) && in_array "$pkg" "${ALLEYUP_NPM_IGNORE[@]}"; then
       printf "Skipping ignored global npm package: %s\n" "$pkg"
       continue
     fi
     pkgs+=("$pkg")
-  done < <(
-    npm list -g --depth=0 --json 2>/dev/null | node -e '
-      let data = "";
-      process.stdin.on("data", chunk => data += chunk);
-      process.stdin.on("end", () => {
-        try {
-          const deps = JSON.parse(data).dependencies || {};
-          for (const [name, info] of Object.entries(deps)) {
-            if (info && typeof info.resolved === "string" && info.resolved.startsWith("file:")) {
-              continue;
-            }
-            console.log(name);
-          }
-        } catch {}
-      });
-    '
-  )
+  done <<<"$list_out"
 
   if (( ${#pkgs[@]} > 0 )); then
     printf "Updating global npm packages: %s\n" "${pkgs[*]}"
@@ -489,7 +488,10 @@ update_shell() {
 
 update_brewfile() {
   if command -v dots >/dev/null 2>&1; then
-    dots brewfile
+    local repo_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/dots/repo"
+    if [[ -n "${DOTFILES_GIST_DIR:-}" ]] || [[ -f "$repo_cfg" ]]; then
+      dots brewfile
+    fi
   elif [[ -n "${DOTFILES_GIST_DIR:-}" ]] && [[ -d "$DOTFILES_GIST_DIR/.git" ]]; then
     brew bundle dump --file="$DOTFILES_GIST_DIR/Brewfile" --force
   fi
@@ -523,50 +525,44 @@ update_macos() {
       labels+=("${line#INSTALL:}")
     fi
   done < <(
-    CURRENT_MAJOR="$current_major" LIST_OUT="$list_out" node -e '
-      const currentMajor = parseInt(process.env.CURRENT_MAJOR || "0", 10);
-      const lines = (process.env.LIST_OUT || "").split(/\r?\n/);
-      let currentLabel = null;
-      let currentDetails = "";
-
-      const flush = () => {
-        if (!currentLabel) return;
-        const combined = `${currentLabel}\n${currentDetails}`;
-        let isMajor = false;
-        const m = combined.match(/macOS\s+(?:[A-Za-z]+\s+)?(\d+)\.(\d+)/i);
-        if (m && currentMajor > 0) {
-          const updateMajor = parseInt(m[1], 10);
-          if (updateMajor !== currentMajor) {
-            isMajor = true;
-          }
-        }
-        const vMatch = currentDetails.match(/Title:\s*macOS\b.*?Version:\s*(\d+)\./i);
-        if (vMatch && currentMajor > 0) {
-          const vMajor = parseInt(vMatch[1], 10);
-          if (vMajor !== currentMajor) {
-            isMajor = true;
-          }
-        }
-        if (isMajor) {
-          console.log(`SKIP:${currentLabel}`);
+    awk -v cur_maj="${current_major:-0}" '
+      function flush() {
+        if (label == "") return
+        if (is_major) {
+          print "SKIP:" label
         } else {
-          console.log(`INSTALL:${currentLabel}`);
+          print "INSTALL:" label
         }
-        currentLabel = null;
-        currentDetails = "";
-      };
-
-      for (const line of lines) {
-        const labelMatch = line.match(/^\s*\*\s+Label:\s*(.+)$/);
-        if (labelMatch) {
-          flush();
-          currentLabel = labelMatch[1].trim();
-        } else if (currentLabel) {
-          currentDetails += line + "\n";
+        label = ""
+        is_major = 0
+      }
+      /^[[:space:]]*\*[[:space:]]+Label:[[:space:]]*/ {
+        flush()
+        sub(/^[[:space:]]*\*[[:space:]]+Label:[[:space:]]*/, "", $0)
+        sub(/[[:space:]]+$/, "", $0)
+        label = $0
+        if (cur_maj > 0 && match(label, /macOS[[:space:]]+([A-Za-z]+[[:space:]]+)?[0-9]+\.[0-9]+/)) {
+          s = substr(label, RSTART, RLENGTH)
+          if (match(s, /[0-9]+\./)) {
+            maj = substr(s, RSTART, RLENGTH - 1) + 0
+            if (maj != cur_maj) is_major = 1
+          }
+        }
+        next
+      }
+      label != "" {
+        if (cur_maj > 0 && $0 ~ /Title:[[:space:]]*macOS/ && match($0, /Version:[[:space:]]*[0-9]+\./)) {
+          s = substr($0, RSTART, RLENGTH)
+          if (match(s, /[0-9]+/)) {
+            maj = substr(s, RSTART, RLENGTH) + 0
+            if (maj != cur_maj) is_major = 1
+          }
         }
       }
-      flush();
-    '
+      END {
+        flush()
+      }
+    ' <<<"$list_out"
   )
 
   if (( ${#labels[@]} > 0 )); then
@@ -664,13 +660,15 @@ if (( ALLEYUP_CODE_REPOS == 1 )); then
   run_step "Git Repositories ($ALLEYUP_CODE_DIR)" update_code_repos
 fi
 
-# 6. Refresh tracked Brewfile in machine config repo
-if (( ALLEYUP_BREWFILE == 1 )) && command -v brew >/dev/null 2>&1 && { command -v dots >/dev/null 2>&1 || [[ -n "${DOTFILES_GIST_DIR:-}" ]]; }; then
-  run_step "Refresh Tracked Brewfile" update_brewfile
+# 6. Refresh tracked Brewfile in machine config repo (only if a machine config repo is configured)
+if (( ALLEYUP_BREWFILE == 1 )) && command -v brew >/dev/null 2>&1; then
+  if [[ -n "${DOTFILES_GIST_DIR:-}" ]] || [[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/dots/repo" ]]; then
+    run_step "Refresh Tracked Brewfile" update_brewfile
+  fi
 fi
 
 # 7. Shell & Completions
-if (( ALLEYUP_SHELL == 1 )); then
+if (( ALLEYUP_SHELL == 1 )) && command -v fish >/dev/null 2>&1; then
   run_step "Shell Plugins & Completions" update_shell
 fi
 
