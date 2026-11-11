@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.0.1"
+DOTS_VERSION="1.0.2"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -18,8 +18,16 @@ MAPPINGS=(
   "alleyup.conf:$HOME/.config/alleyup/config"
   "config.fish:$HOME/.config/fish/config.fish"
   "openclaw.fish:$HOME/.config/fish/conf.d/openclaw.fish"
+  "starship.toml:$HOME/.config/starship.toml"
+  "zshrc:$HOME/.zshrc"
   "zprofile:$HOME/.zprofile"
   "gitconfig:$HOME/.gitconfig"
+  "gh_config.yml:$HOME/.config/gh/config.yml"
+  "flint.conf:$HOME/.config/flint/config"
+  "opencode_cli.json:$HOME/.config/opencode/cli.json"
+  "Preferences.sublime-settings:$HOME/Library/Application Support/Sublime Text/Packages/User/Preferences.sublime-settings"
+  "Default (OSX).sublime-keymap:$HOME/Library/Application Support/Sublime Text/Packages/User/Default (OSX).sublime-keymap"
+  "Package Control.sublime-settings:$HOME/Library/Application Support/Sublime Text/Packages/User/Package Control.sublime-settings"
   "init.lua:$HOME/.hammerspoon/init.lua"
 )
 
