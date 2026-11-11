@@ -34,6 +34,7 @@ CONFIG_FILE="${ALLEYUP_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/alleyup/config}
 : "${ALLEYUP_BREWFILE:=1}"
 : "${ALLEYUP_SHELL:=1}"
 : "${ALLEYUP_MACOS:=1}"
+: "${ALLEYUP_MACOS_MAJOR:=0}"
 
 # Optional exclusion arrays (can be populated in ~/.config/alleyup/config)
 ALLEYUP_BREW_IGNORE=()
@@ -86,7 +87,8 @@ ALLEYUP_PIPX=1                 # Upgrade pipx packages
 ALLEYUP_GH_EXT=1               # Upgrade GitHub CLI extensions
 ALLEYUP_BREWFILE=1             # Refresh tracked Brewfile via `dots brewfile`
 ALLEYUP_SHELL=1                # Update Fisher plugins and Fish completions
-ALLEYUP_MACOS=1                # Run macOS softwareupdate -i -a
+ALLEYUP_MACOS=1                # Run macOS software updates (minor/patch & security updates)
+ALLEYUP_MACOS_MAJOR=0          # Allow major macOS version upgrades (0 = block major OS upgrades)
 
 # Package exclusion lists (space-separated inside parentheses)
 # Useful when a specific formula, cask, or global npm package is broken on this machine:
@@ -332,6 +334,88 @@ update_brewfile() {
   fi
 }
 
+update_macos() {
+  if (( ALLEYUP_MACOS_MAJOR == 1 )); then
+    softwareupdate -i -a
+    return $?
+  fi
+
+  local current_ver current_major
+  current_ver="$(sw_vers -productVersion 2>/dev/null || echo "")"
+  current_major="${current_ver%%.*}"
+
+  printf "Checking for macOS updates (current: macOS %s; major upgrades blocked)...\n" "${current_ver:-unknown}"
+  local list_out
+  list_out="$(softwareupdate -l 2>&1 || true)"
+
+  if grep -q "No new software available" <<<"$list_out"; then
+    printf "No new macOS software updates available.\n"
+    return 0
+  fi
+
+  local labels=()
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if [[ "$line" == SKIP:* ]]; then
+      printf "${YELLOW}Skipping major macOS upgrade: %s${RESET}\n" "${line#SKIP:}"
+    elif [[ "$line" == INSTALL:* ]]; then
+      labels+=("${line#INSTALL:}")
+    fi
+  done < <(
+    CURRENT_MAJOR="$current_major" LIST_OUT="$list_out" node -e '
+      const currentMajor = parseInt(process.env.CURRENT_MAJOR || "0", 10);
+      const lines = (process.env.LIST_OUT || "").split(/\r?\n/);
+      let currentLabel = null;
+      let currentDetails = "";
+
+      const flush = () => {
+        if (!currentLabel) return;
+        const combined = `${currentLabel}\n${currentDetails}`;
+        let isMajor = false;
+        const m = combined.match(/macOS\s+(?:[A-Za-z]+\s+)?(\d+)\.(\d+)/i);
+        if (m && currentMajor > 0) {
+          const updateMajor = parseInt(m[1], 10);
+          if (updateMajor !== currentMajor) {
+            isMajor = true;
+          }
+        }
+        const vMatch = currentDetails.match(/Title:\s*macOS\b.*?Version:\s*(\d+)\./i);
+        if (vMatch && currentMajor > 0) {
+          const vMajor = parseInt(vMatch[1], 10);
+          if (vMajor !== currentMajor) {
+            isMajor = true;
+          }
+        }
+        if (isMajor) {
+          console.log(`SKIP:${currentLabel}`);
+        } else {
+          console.log(`INSTALL:${currentLabel}`);
+        }
+        currentLabel = null;
+        currentDetails = "";
+      };
+
+      for (const line of lines) {
+        const labelMatch = line.match(/^\s*\*\s+Label:\s*(.+)$/);
+        if (labelMatch) {
+          flush();
+          currentLabel = labelMatch[1].trim();
+        } else if (currentLabel) {
+          currentDetails += line + "\n";
+        }
+      }
+      flush();
+    '
+  )
+
+  if (( ${#labels[@]} > 0 )); then
+    printf "Installing macOS updates: %s\n" "${labels[*]}"
+    softwareupdate -i "${labels[@]}"
+  else
+    printf "No minor/security macOS updates to install.\n"
+  fi
+}
+
 # 0. Self-update alleyup & dots from shared tools Gist
 if (( ALLEYUP_SELF_UPDATE == 1 )) && resolve_self_repo >/dev/null 2>&1; then
   run_step "Self-Update (alleyup & dots)" self_update_tools
@@ -414,7 +498,7 @@ fi
 
 # 7. macOS System Software
 if (( ALLEYUP_MACOS == 1 )) && command -v softwareupdate >/dev/null 2>&1; then
-  run_step "macOS Software Updates" softwareupdate -i -a
+  run_step "macOS Software Updates" update_macos
 fi
 
 # Run user post-hook if defined in ~/.config/alleyup/config
