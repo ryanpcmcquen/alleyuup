@@ -4,7 +4,9 @@ set -uo pipefail
 # Ensure standard user and Homebrew binary paths are available (Apple Silicon & Intel Mac)
 export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
-ALLEYUP_VERSION="1.0.1"
+ALLEYUP_VERSION="1.0.2"
+TOOLS_GIST_ID="alleyuup-repo"
+TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -104,6 +106,16 @@ check_version_status() {
         printf "${GREEN}✓ Up to date with remote (%s)${RESET}\n" "${remote_sha:0:7}"
       else
         printf "${YELLOW}⚠ Update available on remote: %s -> %s (run 'alleyup' or 'dots pull')${RESET}\n" "${local_sha:0:7}" "${remote_sha:0:7}"
+      fi
+    fi
+  elif command -v curl >/dev/null 2>&1; then
+    local remote_ver
+    remote_ver="$(curl -fsSL "${TOOLS_RAW_BASE}/alleyup?$(date +%s)" 2>/dev/null | awk -F'"' '/^ALLEYUP_VERSION=/{print $2; exit}')"
+    if [[ -n "$remote_ver" ]]; then
+      if [[ "$remote_ver" == "$ALLEYUP_VERSION" ]]; then
+        printf "${GREEN}✓ Up to date with remote (v%s)${RESET}\n" "$remote_ver"
+      else
+        printf "${YELLOW}⚠ Update available on remote: v%s -> v%s (run 'alleyup')${RESET}\n" "$ALLEYUP_VERSION" "$remote_ver"
       fi
     fi
   fi
@@ -281,17 +293,52 @@ self_update_tools() {
         local branch before_sha after_sha
         branch="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
         before_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
-        git -C "$repo" pull --rebase --quiet origin "$branch"
+        if ! git -C "$repo" pull --rebase --quiet origin "$branch" 2>/dev/null; then
+          # Fallback to HTTPS pull if SSH isn't configured on this machine
+          git -C "$repo" pull --rebase --quiet "https://gist.github.com/${TOOLS_GIST_ID}.git" "$branch"
+        fi
         after_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
         if [[ -n "$before_sha" ]] && [[ "$before_sha" != "$after_sha" ]]; then
           printf "Updated alleyup & dots (%s -> %s); restarting alleyup with new version...\n" "${before_sha:0:7}" "${after_sha:0:7}"
-          exec "$0" --no-self-update "${ORIG_ARGS[@]}"
+          if (( ${#ORIG_ARGS[@]} > 0 )); then
+            exec "$0" --no-self-update "${ORIG_ARGS[@]}"
+          else
+            exec "$0" --no-self-update
+          fi
         else
           printf "alleyup & dots are already up to date (%s).\n" "${after_sha:0:7}"
         fi
       else
         printf "Tools repo (%s) has local uncommitted changes; skipping pull.\n" "$repo"
       fi
+    fi
+    return 0
+  fi
+
+  # Standalone fallback: self-update directly via curl if not inside a git clone
+  if command -v curl >/dev/null 2>&1; then
+    local self_path="${BASH_SOURCE[0]}"
+    local tmp_file="${self_path}.tmp.$$"
+    if curl -fsSL "${TOOLS_RAW_BASE}/alleyup?$(date +%s)" -o "$tmp_file" 2>/dev/null && bash -n "$tmp_file" 2>/dev/null; then
+      if ! cmp -s "$tmp_file" "$self_path"; then
+        chmod +x "$tmp_file"
+        mv "$tmp_file" "$self_path"
+        local new_ver
+        new_ver="$(awk -F'"' '/^ALLEYUP_VERSION=/{print $2; exit}' "$self_path")"
+        printf "Updated standalone alleyup to v%s; restarting alleyup with new version...\n" "${new_ver:-latest}"
+        if (( ${#ORIG_ARGS[@]} > 0 )); then
+          exec "$self_path" --no-self-update "${ORIG_ARGS[@]}"
+        else
+          exec "$self_path" --no-self-update
+        fi
+      else
+        rm -f "$tmp_file"
+        printf "Standalone alleyup is already up to date (v%s).\n" "$ALLEYUP_VERSION"
+      fi
+    else
+      rm -f "$tmp_file"
+      printf "Could not fetch standalone update from Gist.\n"
+      return 1
     fi
   fi
 }
@@ -321,11 +368,10 @@ update_homebrew() {
   fi
 
   if (( ALLEYUP_BREW_CASK == 1 )); then
-    local greedy_flag=()
-    (( ALLEYUP_BREW_GREEDY == 1 )) && greedy_flag=(--greedy)
-
     if (( ${#ALLEYUP_CASK_IGNORE[@]} > 0 )); then
       local casks=()
+      local out_cmd=(brew outdated --cask --quiet)
+      (( ALLEYUP_BREW_GREEDY == 1 )) && out_cmd=(brew outdated --cask --greedy --quiet)
       while IFS= read -r c; do
         [[ -z "$c" ]] && continue
         if in_array "$c" "${ALLEYUP_CASK_IGNORE[@]}"; then
@@ -333,14 +379,22 @@ update_homebrew() {
         else
           casks+=("$c")
         fi
-      done < <(brew outdated --cask "${greedy_flag[@]}" --quiet)
+      done < <("${out_cmd[@]}")
       if (( ${#casks[@]} > 0 )); then
-        brew upgrade --cask "${greedy_flag[@]}" "${casks[@]}"
+        if (( ALLEYUP_BREW_GREEDY == 1 )); then
+          brew upgrade --cask --greedy "${casks[@]}"
+        else
+          brew upgrade --cask "${casks[@]}"
+        fi
       else
         printf "No non-ignored casks to upgrade.\n"
       fi
     else
-      brew upgrade --cask "${greedy_flag[@]}"
+      if (( ALLEYUP_BREW_GREEDY == 1 )); then
+        brew upgrade --cask --greedy
+      else
+        brew upgrade --cask
+      fi
     fi
   fi
 
@@ -573,10 +627,10 @@ update_macos() {
   fi
 }
 
-# 0. Self-update alleyup & dots from shared tools Gist
+# 0. Self-update alleyup & dots from shared tools Gist (git repo or standalone curl)
 printf "${BOLD}alleyup v%s${RESET}\n" "$(get_version_string)"
-if (( ALLEYUP_SELF_UPDATE == 1 )) && resolve_self_repo >/dev/null 2>&1; then
-  run_step "Self-Update (alleyup & dots)" self_update_tools
+if (( ALLEYUP_SELF_UPDATE == 1 )); then
+  run_step "Self-Update (alleyup)" self_update_tools
 fi
 
 # Run user pre-hook if defined in ~/.config/alleyup/config
