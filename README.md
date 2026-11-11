@@ -6,13 +6,16 @@ Per-machine configs, `Brewfile`, and local `alleyup` overrides (`alleyup.conf` -
 
 ---
 
-## Bootstrap on Any Machine
+## One-Line Install on Any Machine
 
 ```sh
-mkdir -p ~/code ~/bin
-gh gist clone alleyuup-repo ~/code/alleyuup-repo
-~/code/alleyuup-repo/dots repo   # Enter existing machine Gist ID, path, or 'new'
-~/code/alleyuup-repo/dots link   # Symlinks alleyup, dots, and all machine configs
+curl -fsSL https://gist.githubusercontent.com/ryanpcmcquen/alleyuup-repo/raw/install.sh | bash
+```
+
+Then to connect a machine's config Gist:
+```sh
+dots repo   # Enter existing machine Gist ID, path, or 'new'
+dots link   # Symlinks all machine configs
 ```
 
 ---
