@@ -4,7 +4,7 @@ set -uo pipefail
 # Ensure standard user and Homebrew binary paths are available (Apple Silicon & Intel Mac)
 export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
-ALLEYUP_VERSION="1.0.10"
+ALLEYUP_VERSION="1.0.11"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -71,6 +71,15 @@ ALLEYUP_CONFIG_MAPPINGS=(
   "profile:$HOME/.profile"
   "inputrc:$HOME/.inputrc"
   "vimrc:$HOME/.vimrc"
+  "emacs:$HOME/.emacs"
+  "emacs_init.el:$HOME/.emacs.d/init.el"
+  "emacs_early_init.el:$HOME/.emacs.d/early-init.el"
+  "xdg_emacs_init.el:$HOME/.config/emacs/init.el"
+  "xdg_emacs_early_init.el:$HOME/.config/emacs/early-init.el"
+  "doom_init.el:$HOME/.config/doom/init.el"
+  "doom_config.el:$HOME/.config/doom/config.el"
+  "doom_packages.el:$HOME/.config/doom/packages.el"
+  "spacemacs:$HOME/.spacemacs"
   "tmux.conf:$HOME/.tmux.conf"
   "gitconfig:$HOME/.gitconfig"
   "gh_config.yml:$HOME/.config/gh/config.yml"

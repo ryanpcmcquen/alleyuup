@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.0.4"
+DOTS_VERSION="1.0.5"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -35,6 +35,15 @@ MAPPINGS=(
   "profile:$HOME/.profile"
   "inputrc:$HOME/.inputrc"
   "vimrc:$HOME/.vimrc"
+  "emacs:$HOME/.emacs"
+  "emacs_init.el:$HOME/.emacs.d/init.el"
+  "emacs_early_init.el:$HOME/.emacs.d/early-init.el"
+  "xdg_emacs_init.el:$HOME/.config/emacs/init.el"
+  "xdg_emacs_early_init.el:$HOME/.config/emacs/early-init.el"
+  "doom_init.el:$HOME/.config/doom/init.el"
+  "doom_config.el:$HOME/.config/doom/config.el"
+  "doom_packages.el:$HOME/.config/doom/packages.el"
+  "spacemacs:$HOME/.spacemacs"
   "tmux.conf:$HOME/.tmux.conf"
   "gitconfig:$HOME/.gitconfig"
   "gh_config.yml:$HOME/.config/gh/config.yml"
