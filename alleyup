@@ -4,7 +4,7 @@ set -uo pipefail
 # Ensure standard user and Homebrew binary paths are available (Apple Silicon & Intel Mac)
 export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
-ALLEYUP_VERSION="1.0.9"
+ALLEYUP_VERSION="1.0.10"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -635,6 +635,10 @@ update_code_repos() {
     return 0
   fi
 
+  local self_repo="" machine_repo=""
+  self_repo="$(resolve_self_repo 2>/dev/null || true)"
+  machine_repo="$(get_machine_repo 2>/dev/null || true)"
+
   local dir
   while IFS= read -r dir; do
     [[ -z "$dir" ]] && continue
@@ -645,51 +649,77 @@ update_code_repos() {
       continue
     fi
 
-    local repo_name
-    repo_name="$(basename "$dir")"
-    if (( ${#ALLEYUP_REPO_IGNORE[@]} > 0 )) && in_array "$repo_name" "${ALLEYUP_REPO_IGNORE[@]}"; then
-      printf "Skipping ignored repo: %s\n" "$repo_name"
+    # Skip the shared tools Gist and machine config Gist (already managed in dedicated steps)
+    local abs_dir
+    abs_dir="$(cd -P "$dir" 2>/dev/null && pwd || echo "$dir")"
+    if [[ -n "$self_repo" && "$abs_dir" == "$self_repo" ]] || [[ -n "$machine_repo" && "$abs_dir" == "$machine_repo" ]]; then
       continue
     fi
 
-    printf "\n--------------------------------------\n"
-    printf "%s\n" "$dir"
-    local current_branch
+    local repo_name
+    repo_name="$(basename "$dir")"
+    if (( ${#ALLEYUP_REPO_IGNORE[@]} > 0 )) && in_array "$repo_name" "${ALLEYUP_REPO_IGNORE[@]}"; then
+      printf "  - %-22s %-28s skipped (ignored)\n" "$repo_name" ""
+      continue
+    fi
+
+    local current_branch branch_label is_default_branch=1
     current_branch="$(git -C "$dir" branch --show-current 2>/dev/null || echo "")"
-    printf "Current branch: ${CYAN}** %s **${RESET}\n" "${current_branch:-(detached)}"
+    branch_label="[${current_branch:-(detached)}]"
 
     if [[ -z "$current_branch" ]] || ! in_array "$current_branch" "${ALLEYUP_DEFAULT_BRANCHES[@]}"; then
-      printf "${RED}** Not on a default branch! **${RESET}\n"
+      is_default_branch=0
       NON_DEFAULT_REPOS+=("- ${repo_name}: ${current_branch:-(detached)}")
+    fi
+
+    local dirty_count dirty_note=""
+    dirty_count="$(git -C "$dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+    if (( dirty_count > 0 )); then
+      dirty_note=" (${dirty_count} dirty)"
     fi
 
     local remotes
     remotes="$(git -C "$dir" remote 2>/dev/null || true)"
     if [[ -z "$remotes" ]]; then
-      printf "No git remotes configured; skipping pull.\n"
+      printf "  - %-22s ${CYAN}%-28s${RESET} skipped (no remote)%s\n" "$repo_name" "$branch_label" "$dirty_note"
       continue
     fi
 
     local origin_url
     origin_url="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
     if [[ "$origin_url" == /* ]] && [[ ! -e "$origin_url" ]]; then
-      printf "${YELLOW}Skipping pull: local remote '%s' no longer exists.${RESET}\n" "$origin_url"
+      printf "  ${YELLOW}-${RESET} %-22s ${CYAN}%-28s${RESET} skipped (missing local remote)%s\n" "$repo_name" "$branch_label" "$dirty_note"
       continue
     fi
 
-    if ! git -C "$dir" pull --all; then
+    local before_sha after_sha pull_out
+    before_sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "")"
+    if pull_out="$(git -C "$dir" pull --all --quiet 2>&1)"; then
+      after_sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "")"
+      local state_text="up to date"
+      if [[ -n "$before_sha" && -n "$after_sha" && "$before_sha" != "$after_sha" ]]; then
+        state_text="${GREEN}updated (${before_sha} -> ${after_sha})${RESET}"
+      fi
+      if (( is_default_branch == 1 )); then
+        printf "  ${GREEN}✓${RESET} %-22s ${CYAN}%-28s${RESET} %b%s\n" "$repo_name" "$branch_label" "$state_text" "$dirty_note"
+      else
+        printf "  ${YELLOW}⚠${RESET} %-22s ${YELLOW}%-28s${RESET} %b%s ${YELLOW}(non-default branch)${RESET}\n" "$repo_name" "$branch_label" "$state_text" "$dirty_note"
+      fi
+    else
       local status=$?
       REPO_PULL_ERRORS+=("- ${repo_name} (exit ${status})")
+      printf "  ${RED}✗${RESET} %-22s ${CYAN}%-28s${RESET} ${RED}pull failed (exit %d)${RESET}%s\n" "$repo_name" "$branch_label" "$status" "$dirty_note"
+      if [[ -n "$pull_out" ]]; then
+        printf "      %s\n" "${pull_out//$'\n'/$'\n      '}"
+      fi
     fi
   done < <(find "$ALLEYUP_CODE_DIR" -maxdepth 2 -type d -not -name '.git' | sort)
 
-  printf "\n--------------------------------------\n"
+  printf "\n"
   if (( ${#NON_DEFAULT_REPOS[@]} > 0 )); then
     printf "${YELLOW}Repos not on a default branch:${RESET}\n"
     printf "  %s\n" "${NON_DEFAULT_REPOS[@]}"
     printf "\n"
-  else
-    printf "${GREEN}All scanned repos are on a default branch.${RESET}\n\n"
   fi
 
   if (( ${#REPO_PULL_ERRORS[@]} > 0 )); then
