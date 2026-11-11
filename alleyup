@@ -4,7 +4,10 @@ set -uo pipefail
 # Ensure standard user and Homebrew binary paths are available (Apple Silicon & Intel Mac)
 export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
-ALLEYUP_VERSION="1.0.11"
+# Disable interactive confirmation prompts in Homebrew
+export HOMEBREW_NO_ASK=1
+
+ALLEYUP_VERSION="1.0.12"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -536,12 +539,12 @@ update_homebrew() {
         fi
       done < <(brew outdated --formula --quiet)
       if (( ${#formulas[@]} > 0 )); then
-        brew upgrade --formula "${formulas[@]}"
+        brew upgrade --formula --no-ask "${formulas[@]}"
       else
         printf "No non-ignored formulas to upgrade.\n"
       fi
     else
-      brew upgrade --formula
+      brew upgrade --formula --no-ask
     fi
   fi
 
@@ -560,18 +563,18 @@ update_homebrew() {
       done < <("${out_cmd[@]}")
       if (( ${#casks[@]} > 0 )); then
         if (( ALLEYUP_BREW_GREEDY == 1 )); then
-          brew upgrade --cask --greedy "${casks[@]}"
+          brew upgrade --cask --greedy --no-ask "${casks[@]}"
         else
-          brew upgrade --cask "${casks[@]}"
+          brew upgrade --cask --no-ask "${casks[@]}"
         fi
       else
         printf "No non-ignored casks to upgrade.\n"
       fi
     else
       if (( ALLEYUP_BREW_GREEDY == 1 )); then
-        brew upgrade --cask --greedy
+        brew upgrade --cask --greedy --no-ask
       else
-        brew upgrade --cask
+        brew upgrade --cask --no-ask
       fi
     fi
   fi
@@ -622,7 +625,7 @@ update_npm_globals() {
 
   if (( ${#pkgs[@]} > 0 )); then
     printf "Updating global npm packages: %s\n" "${pkgs[*]}"
-    npm install -g "${pkgs[@]/%/@latest}"
+    npm install -g --no-audit --no-fund --yes "${pkgs[@]/%/@latest}"
   else
     printf "No non-linked global npm packages to update.\n"
   fi
@@ -856,7 +859,7 @@ sync_machine_repo() {
 
 update_macos() {
   if (( ALLEYUP_MACOS_MAJOR == 1 )); then
-    softwareupdate -i -a
+    softwareupdate -i -a --agree-to-license
     return $?
   fi
 
@@ -924,7 +927,7 @@ update_macos() {
 
   if (( ${#labels[@]} > 0 )); then
     printf "Installing macOS updates: %s\n" "${labels[*]}"
-    softwareupdate -i "${labels[@]}"
+    softwareupdate -i --agree-to-license "${labels[@]}"
   else
     printf "No minor/security macOS updates to install.\n"
   fi
