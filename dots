@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.0.2"
+DOTS_VERSION="1.0.3"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -21,6 +21,15 @@ MAPPINGS=(
   "starship.toml:$HOME/.config/starship.toml"
   "zshrc:$HOME/.zshrc"
   "zprofile:$HOME/.zprofile"
+  "zshenv:$HOME/.zshenv"
+  "zlogin:$HOME/.zlogin"
+  "bashrc:$HOME/.bashrc"
+  "bash_profile:$HOME/.bash_profile"
+  "bash_aliases:$HOME/.bash_aliases"
+  "profile:$HOME/.profile"
+  "inputrc:$HOME/.inputrc"
+  "vimrc:$HOME/.vimrc"
+  "tmux.conf:$HOME/.tmux.conf"
   "gitconfig:$HOME/.gitconfig"
   "gh_config.yml:$HOME/.config/gh/config.yml"
   "flint.conf:$HOME/.config/flint/config"
