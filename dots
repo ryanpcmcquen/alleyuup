@@ -219,7 +219,11 @@ link_one() {
   local target="$2"
 
   if [[ ! -e "$source_path" ]]; then
-    printf "${YELLOW}⚠ Skipping %s (missing: %s)${RESET}\n" "$target" "$source_path"
+    if [[ -f "$target" ]] && [[ ! -L "$target" ]]; then
+      cp -a "$target" "$source_path"
+      ln -sfn "$source_path" "$target"
+      printf "${GREEN}✓ Tracked & linked${RESET} %s -> %s\n" "$target" "$source_path"
+    fi
     return 0
   fi
 
@@ -307,7 +311,7 @@ cmd_status() {
       printf "${GREEN}✓${RESET} %-42s -> %s\n" "$target" "$repo_name"
     elif [[ -e "$target" ]]; then
       printf "${YELLOW}⚠ Not linked:${RESET} %s (run 'dots link')\n" "$target"
-    else
+    elif [[ -e "$source_path" ]]; then
       printf "${RED}✗ Missing:${RESET} %s (run 'dots link')\n" "$target"
     fi
   done

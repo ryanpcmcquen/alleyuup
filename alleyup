@@ -333,6 +333,8 @@ if [[ -f "$CONFIG_FILE" ]]; then
 fi
 
 ORIG_ARGS=("$@")
+CONFIGURE_REPO_TARGET=""
+RUN_CONFIGURE_REPO=0
 while (( $# > 0 )); do
   arg="$1"
   shift
@@ -347,17 +349,15 @@ while (( $# > 0 )); do
       ALLEYUP_SELF_UPDATE=0
       ;;
     --repo)
-      next_arg=""
+      RUN_CONFIGURE_REPO=1
       if (( $# > 0 )) && [[ "$1" != -* ]]; then
-        next_arg="$1"
+        CONFIGURE_REPO_TARGET="$1"
         shift
       fi
-      configure_machine_repo "$next_arg"
-      exit 0
       ;;
     --repo=*)
-      configure_machine_repo "${arg#--repo=}"
-      exit 0
+      RUN_CONFIGURE_REPO=1
+      CONFIGURE_REPO_TARGET="${arg#--repo=}"
       ;;
     --config|--edit)
       if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -847,6 +847,12 @@ update_macos() {
     printf "No minor/security macOS updates to install.\n"
   fi
 }
+
+# Handle --repo after all helper functions are defined
+if (( RUN_CONFIGURE_REPO == 1 )); then
+  configure_machine_repo "$CONFIGURE_REPO_TARGET"
+  exit 0
+fi
 
 # 0. Self-update alleyup & dots from shared tools Gist (git repo or standalone curl)
 printf "${BOLD}alleyup v%s${RESET}\n" "$(get_version_string)"
