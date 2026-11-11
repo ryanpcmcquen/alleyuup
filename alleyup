@@ -137,6 +137,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
 
+ORIG_ARGS=("$@")
 for arg in "$@"; do
   case "$arg" in
     --no-macos|--fast)
@@ -206,10 +207,17 @@ self_update_tools() {
   if repo="$(resolve_self_repo)"; then
     if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
       if [[ -z "$(git -C "$repo" status --porcelain 2>/dev/null)" ]]; then
-        local branch
+        local branch before_sha after_sha
         branch="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+        before_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
         git -C "$repo" pull --rebase --quiet origin "$branch"
-        printf "Updated tools repo (%s)\n" "$repo"
+        after_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
+        if [[ -n "$before_sha" ]] && [[ "$before_sha" != "$after_sha" ]]; then
+          printf "Updated alleyup & dots (%s -> %s); restarting alleyup with new version...\n" "${before_sha:0:7}" "${after_sha:0:7}"
+          exec "$0" --no-self-update "${ORIG_ARGS[@]}"
+        else
+          printf "alleyup & dots are already up to date (%s).\n" "${after_sha:0:7}"
+        fi
       else
         printf "Tools repo (%s) has local uncommitted changes; skipping pull.\n" "$repo"
       fi
