@@ -4,6 +4,8 @@ set -uo pipefail
 # Ensure standard user and Homebrew binary paths are available
 export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
 
+ALLEYUP_VERSION="1.0.0"
+
 BOLD="\033[1m"
 BLUE="\033[1;34m"
 CYAN="\033[1;36m"
@@ -69,6 +71,42 @@ resolve_self_repo() {
     return 0
   fi
   return 1
+}
+
+get_version_string() {
+  local repo
+  if repo="$(resolve_self_repo 2>/dev/null)"; then
+    local sha count dirty=""
+    sha="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+    count="$(git -C "$repo" rev-list --count HEAD 2>/dev/null || echo "0")"
+    if [[ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]]; then
+      dirty="-dirty"
+    fi
+    printf "%s (r%s, %s%s)" "$ALLEYUP_VERSION" "$count" "$sha" "$dirty"
+  else
+    printf "%s (standalone)" "$ALLEYUP_VERSION"
+  fi
+}
+
+check_version_status() {
+  local ver
+  ver="$(get_version_string)"
+  printf "alleyup v%s\n" "$ver"
+
+  local repo
+  if repo="$(resolve_self_repo 2>/dev/null)" && git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+    local branch local_sha remote_sha
+    branch="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+    local_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
+    remote_sha="$(git -C "$repo" ls-remote origin "refs/heads/$branch" 2>/dev/null | awk '{print $1}')"
+    if [[ -n "$remote_sha" ]]; then
+      if [[ "$local_sha" == "$remote_sha" ]]; then
+        printf "${GREEN}✓ Up to date with remote (%s)${RESET}\n" "${remote_sha:0:7}"
+      else
+        printf "${YELLOW}⚠ Update available on remote: %s -> %s (run 'alleyup' or 'dots pull')${RESET}\n" "${local_sha:0:7}" "${remote_sha:0:7}"
+      fi
+    fi
+  fi
 }
 
 write_default_config() {
@@ -147,6 +185,8 @@ Options:
   --no-self-update     Skip pulling latest alleyup & dots from the tools Gist
   --config, --edit     Open $CONFIG_FILE in \$EDITOR (creates default if missing)
   --print-config       Print the path and contents of $CONFIG_FILE
+  --check              Check version and whether a newer version is available on remote
+  -v, --version        Print alleyup version and git revision
   -h, --help           Show this help message
 EOF
 }
@@ -184,6 +224,14 @@ for arg in "$@"; do
       else
         printf "(No config file found at %s; run 'alleyup --config' to create one)\n" "$CONFIG_FILE"
       fi
+      exit 0
+      ;;
+    -v|--version)
+      printf "alleyup v%s\n" "$(get_version_string)"
+      exit 0
+      ;;
+    --check)
+      check_version_status
       exit 0
       ;;
     -h|--help)
@@ -530,6 +578,7 @@ update_macos() {
 }
 
 # 0. Self-update alleyup & dots from shared tools Gist
+printf "${BOLD}alleyup v%s${RESET}\n" "$(get_version_string)"
 if (( ALLEYUP_SELF_UPDATE == 1 )) && resolve_self_repo >/dev/null 2>&1; then
   run_step "Self-Update (alleyup & dots)" self_update_tools
 fi
