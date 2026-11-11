@@ -292,7 +292,11 @@ cmd_brewfile() {
   ensure_repo_dir
   if command -v brew >/dev/null 2>&1; then
     printf "${BLUE}==> Refreshing Brewfile${RESET}\n"
-    brew bundle dump --file="$REPO_DIR/Brewfile" --force
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+      brew bundle dump --file="$REPO_DIR/Brewfile" --force
+    else
+      HOMEBREW_BUNDLE_DUMP_NO_NPM=1 brew bundle dump --file="$REPO_DIR/Brewfile" --force
+    fi
     printf "${GREEN}✓ Updated %s/Brewfile${RESET}\n" "$REPO_DIR"
   else
     printf "${YELLOW}⚠ Homebrew not found; skipping Brewfile dump${RESET}\n"
@@ -345,7 +349,8 @@ cmd_sync() {
       git -C "$tools_dir" commit -m "$msg"
       if git -C "$tools_dir" remote get-url origin >/dev/null 2>&1; then
         local tbranch
-        tbranch="$(git -C "$tools_dir" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+        tbranch="$(git -C "$tools_dir" symbolic-ref --short HEAD 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+        [[ -z "$tbranch" ]] && tbranch="main"
         git -C "$tools_dir" pull --rebase origin "$tbranch"
         git -C "$tools_dir" push origin "$tbranch"
         printf "${GREEN}✓ Shared scripts synced!${RESET}\n\n"
@@ -364,7 +369,8 @@ cmd_sync() {
   fi
   if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
     local branch
-    branch="$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+    branch="$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+    [[ -z "$branch" ]] && branch="main"
     git -C "$REPO_DIR" pull --rebase origin "$branch"
     git -C "$REPO_DIR" push origin "$branch"
     printf "${BOLD}${GREEN}✨ Machine configs synced!${RESET}\n"

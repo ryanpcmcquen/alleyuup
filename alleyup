@@ -4,7 +4,7 @@ set -uo pipefail
 # Ensure standard user and Homebrew binary paths are available (Apple Silicon & Intel Mac)
 export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
-ALLEYUP_VERSION="1.0.8"
+ALLEYUP_VERSION="1.0.9"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -438,6 +438,22 @@ in_array() {
   return 1
 }
 
+# Verify a command exists AND is not a broken '#!/usr/bin/env node' wrapper on a machine without node
+has_working_cmd() {
+  local cmd="$1"
+  local bin_path
+  bin_path="$(command -v "$cmd" 2>/dev/null || true)"
+  [[ -z "$bin_path" ]] && return 1
+  if ! command -v node >/dev/null 2>&1 && [[ -f "$bin_path" ]]; then
+    local first_line
+    IFS= read -r first_line < "$bin_path" 2>/dev/null || true
+    if [[ "$first_line" == "#!"*node* ]]; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
 self_update_tools() {
   local repo
   if repo="$(resolve_self_repo)"; then
@@ -557,7 +573,7 @@ update_homebrew() {
 }
 
 ensure_node_via_nvm() {
-  if ! command -v npm >/dev/null 2>&1; then
+  if ! has_working_cmd npm; then
     export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
     if [[ -s "$NVM_DIR/nvm.sh" ]]; then
       # shellcheck disable=SC1091
@@ -699,7 +715,7 @@ update_local_projects() {
   fi
 
   local scribe_dir="$ALLEYUP_CODE_DIR/scribe"
-  if [[ -f "$scribe_dir/package.json" ]] && command -v npm >/dev/null 2>&1; then
+  if [[ -f "$scribe_dir/package.json" ]] && has_working_cmd npm; then
     printf "Building scribe in %s...\n" "$scribe_dir"
     if (cd "$scribe_dir" && npm install --no-audit --no-fund && npm run build); then
       if ! command -v scribe >/dev/null 2>&1; then
@@ -762,7 +778,11 @@ sync_machine_repo() {
 
   # 2. Dump Brewfile if enabled and Homebrew is installed
   if (( ALLEYUP_BREWFILE == 1 )) && command -v brew >/dev/null 2>&1; then
-    brew bundle dump --file="$machine_repo/Brewfile" --force
+    if has_working_cmd npm; then
+      brew bundle dump --file="$machine_repo/Brewfile" --force
+    else
+      HOMEBREW_BUNDLE_DUMP_NO_NPM=1 brew bundle dump --file="$machine_repo/Brewfile" --force
+    fi
     printf "Updated %s/Brewfile\n" "$machine_repo"
   fi
 
@@ -784,7 +804,8 @@ sync_machine_repo() {
 
     if git -C "$machine_repo" remote get-url origin >/dev/null 2>&1; then
       local branch
-      branch="$(git -C "$machine_repo" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+      branch="$(git -C "$machine_repo" symbolic-ref --short HEAD 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+      [[ -z "$branch" ]] && branch="main"
       git -C "$machine_repo" pull --rebase --quiet origin "$branch" || true
       if [[ -n "$(git -C "$machine_repo" status --porcelain -b 2>/dev/null | grep '^## .*\[ahead ')" ]] || ! git -C "$machine_repo" diff --quiet "origin/$branch" HEAD 2>/dev/null; then
         git -C "$machine_repo" push origin "$branch"
@@ -902,11 +923,11 @@ if (( ALLEYUP_MAS == 1 )) && command -v mas >/dev/null 2>&1; then
 fi
 
 # 3. Standalone CLI Tools
-if (( ALLEYUP_AGY == 1 )) && command -v agy >/dev/null 2>&1; then
+if (( ALLEYUP_AGY == 1 )) && has_working_cmd agy; then
   run_step "Antigravity CLI (agy)" agy update
 fi
 
-if (( ALLEYUP_CLAUDE == 1 )) && command -v claude >/dev/null 2>&1; then
+if (( ALLEYUP_CLAUDE == 1 )) && has_working_cmd claude; then
   # Only run standalone 'claude update' if claude is not already managed as a Homebrew cask
   if ! command -v brew >/dev/null 2>&1 || ! brew list --cask claude-code >/dev/null 2>&1; then
     run_step "Claude Code CLI (claude)" claude update
@@ -917,7 +938,7 @@ if (( ALLEYUP_OPENCODE_STANDALONE == 1 )) && [[ -x "$HOME/.opencode/bin/opencode
   run_step "OpenCode (standalone)" "$HOME/.opencode/bin/opencode" upgrade
 fi
 
-if (( ALLEYUP_OPENCLAW == 1 )) && command -v openclaw >/dev/null 2>&1; then
+if (( ALLEYUP_OPENCLAW == 1 )) && has_working_cmd openclaw; then
   if ! openclaw update status 2>/dev/null | grep -q "Managed by OpenClaw.app"; then
     run_step "OpenClaw CLI" openclaw update --yes
   fi
@@ -928,7 +949,7 @@ if (( ALLEYUP_NVM == 1 )); then
   ensure_node_via_nvm
 fi
 
-if (( ALLEYUP_NPM == 1 )) && command -v npm >/dev/null 2>&1; then
+if (( ALLEYUP_NPM == 1 )) && has_working_cmd npm; then
   if declare -F alleyup_override_npm >/dev/null 2>&1; then
     run_step "Global npm Packages (Custom Override)" alleyup_override_npm
   else
@@ -936,7 +957,7 @@ if (( ALLEYUP_NPM == 1 )) && command -v npm >/dev/null 2>&1; then
   fi
 fi
 
-if (( ALLEYUP_PNPM == 1 )) && command -v pnpm >/dev/null 2>&1; then
+if (( ALLEYUP_PNPM == 1 )) && has_working_cmd pnpm; then
   run_step "Global pnpm Packages" update_pnpm_globals
 fi
 
