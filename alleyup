@@ -6,6 +6,7 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
+CYAN="\033[1;36m"
 GREEN="\033[1;32m"
 YELLOW="\033[1;33m"
 RED="\033[1;31m"
@@ -23,25 +24,35 @@ CONFIG_FILE="${ALLEYUP_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/alleyup/config}
 : "${ALLEYUP_BREW_CLEANUP:=1}"
 : "${ALLEYUP_MAS:=1}"
 : "${ALLEYUP_AGY:=1}"
+: "${ALLEYUP_CLAUDE:=1}"
 : "${ALLEYUP_OPENCODE_STANDALONE:=1}"
 : "${ALLEYUP_OPENCLAW:=1}"
+: "${ALLEYUP_NVM:=1}"
 : "${ALLEYUP_NPM:=1}"
 : "${ALLEYUP_PNPM:=1}"
 : "${ALLEYUP_RUSTUP:=1}"
 : "${ALLEYUP_UV:=1}"
 : "${ALLEYUP_PIPX:=1}"
 : "${ALLEYUP_GH_EXT:=1}"
+: "${ALLEYUP_CODE_REPOS:=1}"
+: "${ALLEYUP_CODE_DIR:=$HOME/code}"
 : "${ALLEYUP_BREWFILE:=1}"
 : "${ALLEYUP_SHELL:=1}"
 : "${ALLEYUP_MACOS:=1}"
 : "${ALLEYUP_MACOS_MAJOR:=0}"
 
+# Default branch names for ~/code repo checks (can be overridden in ~/.config/alleyup/config)
+ALLEYUP_DEFAULT_BRANCHES=("main" "master" "dev" "staging")
+
 # Optional exclusion arrays (can be populated in ~/.config/alleyup/config)
 ALLEYUP_BREW_IGNORE=()
 ALLEYUP_CASK_IGNORE=()
 ALLEYUP_NPM_IGNORE=()
+ALLEYUP_REPO_IGNORE=()
 
 FAILED_STEPS=()
+NON_DEFAULT_REPOS=()
+REPO_PULL_ERRORS=()
 
 resolve_self_repo() {
   local source="${BASH_SOURCE[0]}"
@@ -77,24 +88,32 @@ ALLEYUP_BREW_GREEDY=1          # Pass --greedy when upgrading casks
 ALLEYUP_BREW_CLEANUP=1         # Run brew cleanup --prune=all
 ALLEYUP_MAS=1                  # Upgrade Mac App Store apps via mas
 ALLEYUP_AGY=1                  # Upgrade Antigravity CLI (agy)
+ALLEYUP_CLAUDE=1               # Upgrade Claude Code CLI (claude update)
 ALLEYUP_OPENCODE_STANDALONE=1  # Upgrade standalone ~/.opencode/bin/opencode (if present)
 ALLEYUP_OPENCLAW=1             # Upgrade OpenClaw CLI (if not app-managed)
+ALLEYUP_NVM=1                  # Run 'nvm install --lts' if npm is missing and nvm is installed
 ALLEYUP_NPM=1                  # Upgrade global npm packages (skips local file: links)
 ALLEYUP_PNPM=1                 # Upgrade global pnpm packages
 ALLEYUP_RUSTUP=1               # Upgrade Rust toolchains via rustup
 ALLEYUP_UV=1                   # Upgrade uv tools
 ALLEYUP_PIPX=1                 # Upgrade pipx packages
 ALLEYUP_GH_EXT=1               # Upgrade GitHub CLI extensions
+ALLEYUP_CODE_REPOS=1           # Walk git repos in ALLEYUP_CODE_DIR, pull, and report branches
+ALLEYUP_CODE_DIR="$HOME/code"  # Directory to scan for git repositories
 ALLEYUP_BREWFILE=1             # Refresh tracked Brewfile via `dots brewfile`
 ALLEYUP_SHELL=1                # Update Fisher plugins and Fish completions
 ALLEYUP_MACOS=1                # Run macOS software updates (minor/patch & security updates)
 ALLEYUP_MACOS_MAJOR=0          # Allow major macOS version upgrades (0 = block major OS upgrades)
 
-# Package exclusion lists (space-separated inside parentheses)
-# Useful when a specific formula, cask, or global npm package is broken on this machine:
+# Default branches when checking git repos in ALLEYUP_CODE_DIR:
+ALLEYUP_DEFAULT_BRANCHES=("main" "master" "dev" "staging")
+
+# Package & repo exclusion lists (space-separated inside parentheses)
+# Useful when a specific formula, cask, npm package, or git repo is broken on this machine:
 ALLEYUP_BREW_IGNORE=()
 ALLEYUP_CASK_IGNORE=()
 ALLEYUP_NPM_IGNORE=()
+ALLEYUP_REPO_IGNORE=()
 
 # Optional hook functions (uncomment to override or extend behavior on this machine):
 #
@@ -118,12 +137,13 @@ usage() {
   cat <<EOF
 Usage: alleyup [options]
 
-Upgrade local packages, casks, App Store apps, CLI tools, and macOS software.
+Upgrade local packages, casks, App Store apps, CLI tools, git repos, and macOS software.
   Tools repo:   $self_repo
   Local config: $CONFIG_FILE
 
 Options:
   --no-macos, --fast   Skip macOS system software updates (softwareupdate)
+  --no-repos           Skip pulling git repositories in ~/code
   --no-self-update     Skip pulling latest alleyup & dots from the tools Gist
   --config, --edit     Open $CONFIG_FILE in \$EDITOR (creates default if missing)
   --print-config       Print the path and contents of $CONFIG_FILE
@@ -142,6 +162,9 @@ for arg in "$@"; do
   case "$arg" in
     --no-macos|--fast)
       ALLEYUP_MACOS=0
+      ;;
+    --no-repos)
+      ALLEYUP_CODE_REPOS=0
       ;;
     --no-self-update)
       ALLEYUP_SELF_UPDATE=0
@@ -278,6 +301,19 @@ update_homebrew() {
   fi
 }
 
+ensure_node_via_nvm() {
+  if ! command -v npm >/dev/null 2>&1; then
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+      # shellcheck disable=SC1091
+      source "$NVM_DIR/nvm.sh"
+    fi
+    if command -v nvm >/dev/null 2>&1; then
+      run_step "Node LTS via nvm" nvm install --lts
+    fi
+  fi
+}
+
 update_npm_globals() {
   local pkgs=()
   while IFS= read -r pkg; do
@@ -320,6 +356,75 @@ update_pnpm_globals() {
     pnpm update -g --latest
   else
     printf "No global pnpm packages installed.\n"
+  fi
+}
+
+update_code_repos() {
+  if [[ ! -d "$ALLEYUP_CODE_DIR" ]]; then
+    printf "Directory %s does not exist; skipping.\n" "$ALLEYUP_CODE_DIR"
+    return 0
+  fi
+
+  local dir
+  while IFS= read -r dir; do
+    [[ -z "$dir" ]] && continue
+    if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+      continue
+    fi
+    if [[ -n "$(git -C "$dir" rev-parse --show-prefix 2>/dev/null)" ]]; then
+      continue
+    fi
+
+    local repo_name
+    repo_name="$(basename "$dir")"
+    if (( ${#ALLEYUP_REPO_IGNORE[@]} > 0 )) && in_array "$repo_name" "${ALLEYUP_REPO_IGNORE[@]}"; then
+      printf "Skipping ignored repo: %s\n" "$repo_name"
+      continue
+    fi
+
+    printf "\n--------------------------------------\n"
+    printf "%s\n" "$dir"
+    local current_branch
+    current_branch="$(git -C "$dir" branch --show-current 2>/dev/null || echo "")"
+    printf "Current branch: ${CYAN}** %s **${RESET}\n" "${current_branch:-(detached)}"
+
+    if [[ -z "$current_branch" ]] || ! in_array "$current_branch" "${ALLEYUP_DEFAULT_BRANCHES[@]}"; then
+      printf "${RED}** Not on a default branch! **${RESET}\n"
+      NON_DEFAULT_REPOS+=("- ${repo_name}: ${current_branch:-(detached)}")
+    fi
+
+    local remotes
+    remotes="$(git -C "$dir" remote 2>/dev/null || true)"
+    if [[ -z "$remotes" ]]; then
+      printf "No git remotes configured; skipping pull.\n"
+      continue
+    fi
+
+    local origin_url
+    origin_url="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
+    if [[ "$origin_url" == /* ]] && [[ ! -e "$origin_url" ]]; then
+      printf "${YELLOW}Skipping pull: local remote '%s' no longer exists.${RESET}\n" "$origin_url"
+      continue
+    fi
+
+    if ! git -C "$dir" pull --all; then
+      local status=$?
+      REPO_PULL_ERRORS+=("- ${repo_name} (exit ${status})")
+    fi
+  done < <(find "$ALLEYUP_CODE_DIR" -maxdepth 2 -type d -not -name '.git' | sort)
+
+  printf "\n--------------------------------------\n"
+  if (( ${#NON_DEFAULT_REPOS[@]} > 0 )); then
+    printf "${YELLOW}Repos not on a default branch:${RESET}\n"
+    printf "  %s\n" "${NON_DEFAULT_REPOS[@]}"
+  else
+    printf "${GREEN}All scanned repos are on a default branch.${RESET}\n"
+  fi
+
+  if (( ${#REPO_PULL_ERRORS[@]} > 0 )); then
+    printf "${YELLOW}Repo pull errors:${RESET}\n"
+    printf "  %s\n" "${REPO_PULL_ERRORS[@]}"
+    return 1
   fi
 }
 
@@ -453,6 +558,13 @@ if (( ALLEYUP_AGY == 1 )) && command -v agy >/dev/null 2>&1; then
   run_step "Antigravity CLI (agy)" agy update
 fi
 
+if (( ALLEYUP_CLAUDE == 1 )) && command -v claude >/dev/null 2>&1; then
+  # Only run standalone 'claude update' if claude is not already managed as a Homebrew cask
+  if ! command -v brew >/dev/null 2>&1 || ! brew list --cask claude-code >/dev/null 2>&1; then
+    run_step "Claude Code CLI (claude)" claude update
+  fi
+fi
+
 if (( ALLEYUP_OPENCODE_STANDALONE == 1 )) && [[ -x "$HOME/.opencode/bin/opencode" ]]; then
   run_step "OpenCode (standalone)" "$HOME/.opencode/bin/opencode" upgrade
 fi
@@ -464,6 +576,10 @@ if (( ALLEYUP_OPENCLAW == 1 )) && command -v openclaw >/dev/null 2>&1; then
 fi
 
 # 4. Dev Toolchains & Global Packages
+if (( ALLEYUP_NVM == 1 )); then
+  ensure_node_via_nvm
+fi
+
 if (( ALLEYUP_NPM == 1 )) && command -v npm >/dev/null 2>&1; then
   if declare -F alleyup_override_npm >/dev/null 2>&1; then
     run_step "Global npm Packages (Custom Override)" alleyup_override_npm
@@ -494,17 +610,22 @@ if (( ALLEYUP_GH_EXT == 1 )) && command -v gh >/dev/null 2>&1; then
   fi
 fi
 
-# 5. Refresh tracked Brewfile in machine config repo
+# 5. Git Repositories in ~/code
+if (( ALLEYUP_CODE_REPOS == 1 )); then
+  run_step "Git Repositories ($ALLEYUP_CODE_DIR)" update_code_repos
+fi
+
+# 6. Refresh tracked Brewfile in machine config repo
 if (( ALLEYUP_BREWFILE == 1 )) && command -v brew >/dev/null 2>&1 && { command -v dots >/dev/null 2>&1 || [[ -n "${DOTFILES_GIST_DIR:-}" ]]; }; then
   run_step "Refresh Tracked Brewfile" update_brewfile
 fi
 
-# 6. Shell & Completions
+# 7. Shell & Completions
 if (( ALLEYUP_SHELL == 1 )); then
   run_step "Shell Plugins & Completions" update_shell
 fi
 
-# 7. macOS System Software
+# 8. macOS System Software
 if (( ALLEYUP_MACOS == 1 )) && command -v softwareupdate >/dev/null 2>&1; then
   run_step "macOS Software Updates" update_macos
 fi
