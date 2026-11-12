@@ -7,7 +7,7 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 # Disable interactive confirmation prompts in Homebrew
 export HOMEBREW_NO_ASK=1
 
-ALLEYUP_VERSION="1.0.13"
+ALLEYUP_VERSION="1.0.14"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -528,54 +528,42 @@ update_homebrew() {
   brew update
 
   if (( ALLEYUP_BREW_FORMULA == 1 )); then
-    if (( ${#ALLEYUP_BREW_IGNORE[@]} > 0 )); then
-      local formulas=()
-      while IFS= read -r f; do
-        [[ -z "$f" ]] && continue
-        if in_array "$f" "${ALLEYUP_BREW_IGNORE[@]}"; then
-          printf "Skipping ignored formula: %s\n" "$f"
-        else
-          formulas+=("$f")
-        fi
-      done < <(brew outdated --formula --quiet)
-      if (( ${#formulas[@]} > 0 )); then
-        brew upgrade --formula --no-ask "${formulas[@]}"
+    local formulas=()
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      if (( ${#ALLEYUP_BREW_IGNORE[@]} > 0 )) && in_array "$f" "${ALLEYUP_BREW_IGNORE[@]}"; then
+        printf "Skipping ignored formula: %s\n" "$f"
       else
-        printf "No non-ignored formulas to upgrade.\n"
+        formulas+=("$f")
       fi
+    done < <(brew outdated --formula --quiet)
+    if (( ${#formulas[@]} > 0 )); then
+      brew upgrade --formula --no-ask "${formulas[@]}"
     else
-      brew upgrade --formula --no-ask
+      printf "All Homebrew formulas are up to date.\n"
     fi
   fi
 
   if (( ALLEYUP_BREW_CASK == 1 )); then
-    if (( ${#ALLEYUP_CASK_IGNORE[@]} > 0 )); then
-      local casks=()
-      local out_cmd=(brew outdated --cask --quiet)
-      (( ALLEYUP_BREW_GREEDY == 1 )) && out_cmd=(brew outdated --cask --greedy --quiet)
-      while IFS= read -r c; do
-        [[ -z "$c" ]] && continue
-        if in_array "$c" "${ALLEYUP_CASK_IGNORE[@]}"; then
-          printf "Skipping ignored cask: %s\n" "$c"
-        else
-          casks+=("$c")
-        fi
-      done < <("${out_cmd[@]}")
-      if (( ${#casks[@]} > 0 )); then
-        if (( ALLEYUP_BREW_GREEDY == 1 )); then
-          brew upgrade --cask --greedy --no-ask "${casks[@]}"
-        else
-          brew upgrade --cask --no-ask "${casks[@]}"
-        fi
+    local casks=()
+    local out_cmd=(brew outdated --cask --quiet)
+    (( ALLEYUP_BREW_GREEDY == 1 )) && out_cmd=(brew outdated --cask --greedy --quiet)
+    while IFS= read -r c; do
+      [[ -z "$c" ]] && continue
+      if (( ${#ALLEYUP_CASK_IGNORE[@]} > 0 )) && in_array "$c" "${ALLEYUP_CASK_IGNORE[@]}"; then
+        printf "Skipping ignored cask: %s\n" "$c"
       else
-        printf "No non-ignored casks to upgrade.\n"
+        casks+=("$c")
+      fi
+    done < <("${out_cmd[@]}")
+    if (( ${#casks[@]} > 0 )); then
+      if (( ALLEYUP_BREW_GREEDY == 1 )); then
+        brew upgrade --cask --greedy --no-ask "${casks[@]}"
+      else
+        brew upgrade --cask --no-ask "${casks[@]}"
       fi
     else
-      if (( ALLEYUP_BREW_GREEDY == 1 )); then
-        brew upgrade --cask --greedy --no-ask
-      else
-        brew upgrade --cask --no-ask
-      fi
+      printf "All Homebrew casks are up to date.\n"
     fi
   fi
 
@@ -749,28 +737,54 @@ update_code_repos() {
 update_local_projects() {
   local flint_dir="$ALLEYUP_CODE_DIR/flint"
   if [[ -f "$flint_dir/Makefile" ]] && command -v make >/dev/null 2>&1; then
-    printf "Building flint in %s...\n" "$flint_dir"
-    if make -C "$flint_dir" force; then
+    local need_flint=0
+    if [[ ! -x "$flint_dir/flint" ]] || [[ ! -x "$HOME/bin/flint" ]]; then
+      need_flint=1
+    elif [[ -n "$(find "$flint_dir/source" "$flint_dir/Makefile" -newer "$flint_dir/flint" 2>/dev/null | head -n 1)" ]]; then
+      need_flint=1
+    elif ! cmp -s "$flint_dir/flint" "$HOME/bin/flint"; then
       mkdir -p "$HOME/bin"
       cp -f "$flint_dir/flint" "$HOME/bin/flint"
-      printf "${GREEN}✓ Installed %s/flint -> %s/bin/flint${RESET}\n" "$flint_dir" "$HOME"
+      printf "${GREEN}✓ Updated %s/bin/flint${RESET}\n" "$HOME"
+    fi
+
+    if (( need_flint == 1 )); then
+      printf "Building flint in %s...\n" "$flint_dir"
+      if make -C "$flint_dir" force; then
+        mkdir -p "$HOME/bin"
+        cp -f "$flint_dir/flint" "$HOME/bin/flint"
+        printf "${GREEN}✓ Built & installed %s/flint -> %s/bin/flint${RESET}\n" "$flint_dir" "$HOME"
+      else
+        printf "${YELLOW}⚠ Failed to build flint${RESET}\n" >&2
+        return 1
+      fi
     else
-      printf "${YELLOW}⚠ Failed to build flint${RESET}\n" >&2
-      return 1
+      printf "flint is already up to date.\n"
     fi
   fi
 
   local scribe_dir="$ALLEYUP_CODE_DIR/scribe"
   if [[ -f "$scribe_dir/package.json" ]] && has_working_cmd npm; then
-    printf "Building scribe in %s...\n" "$scribe_dir"
-    if (cd "$scribe_dir" && npm install --loglevel=error --no-audit --no-fund && npm run --silent build); then
-      if ! command -v scribe >/dev/null 2>&1; then
-        (cd "$scribe_dir" && npm link --loglevel=error) || true
+    local need_scribe=0
+    if [[ ! -d "$scribe_dir/node_modules" ]] || [[ ! -f "$scribe_dir/dist/cli.js" ]]; then
+      need_scribe=1
+    elif [[ -n "$(find "$scribe_dir/src" "$scribe_dir/package.json" "$scribe_dir/tsconfig.json" -newer "$scribe_dir/dist/cli.js" 2>/dev/null | head -n 1)" ]]; then
+      need_scribe=1
+    fi
+
+    if (( need_scribe == 1 )); then
+      printf "Building scribe in %s...\n" "$scribe_dir"
+      if (cd "$scribe_dir" && npm install --loglevel=error --no-audit --no-fund && npm run --silent build); then
+        printf "${GREEN}✓ Built scribe (%s)${RESET}\n" "$scribe_dir"
+      else
+        printf "${YELLOW}⚠ Failed to build scribe${RESET}\n" >&2
+        return 1
       fi
-      printf "${GREEN}✓ Built scribe (%s)${RESET}\n" "$scribe_dir"
     else
-      printf "${YELLOW}⚠ Failed to build scribe${RESET}\n" >&2
-      return 1
+      printf "scribe is already up to date.\n"
+    fi
+    if ! command -v scribe >/dev/null 2>&1; then
+      (cd "$scribe_dir" && npm link --loglevel=error) || true
     fi
   fi
 }
@@ -781,8 +795,13 @@ update_shell() {
       printf "Updating Fisher plugins...\n"
       fish -c 'fisher update'
     fi
-    printf "Updating Fish manpage completions...\n"
-    fish -c 'fish_update_completions'
+    local comp_dir="${XDG_CACHE_HOME:-$HOME/.cache}/fish/generated_completions"
+    if [[ ! -d "$comp_dir" ]] || [[ -n "$(find "$comp_dir" -maxdepth 0 -mtime +7 2>/dev/null)" ]]; then
+      printf "Updating Fish manpage completions...\n"
+      fish -c 'fish_update_completions'
+    else
+      printf "Fish manpage completions are recent (<7 days old); skipping.\n"
+    fi
   fi
 
   if [[ -d "${ZSH:-$HOME/.oh-my-zsh}" ]] && command -v zsh >/dev/null 2>&1; then
@@ -852,8 +871,8 @@ sync_machine_repo() {
       local branch
       branch="$(git -C "$machine_repo" symbolic-ref --short HEAD 2>/dev/null | head -n 1 | tr -d '[:space:]')"
       [[ -z "$branch" ]] && branch="main"
-      git -C "$machine_repo" pull --rebase --quiet origin "$branch" || true
       if [[ -n "$(git -C "$machine_repo" status --porcelain -b 2>/dev/null | grep '^## .*\[ahead ')" ]] || ! git -C "$machine_repo" diff --quiet "origin/$branch" HEAD 2>/dev/null; then
+        git -C "$machine_repo" pull --rebase --quiet origin "$branch" || true
         git -C "$machine_repo" push origin "$branch"
         printf "Pushed machine configs to %s (%s)\n" "$machine_repo" "$branch"
       fi
@@ -965,7 +984,15 @@ fi
 
 # 2. Mac App Store (mas)
 if (( ALLEYUP_MAS == 1 )) && command -v mas >/dev/null 2>&1; then
-  run_step "Mac App Store (mas)" mas upgrade
+  run_step "Mac App Store (mas)" bash -c '
+    out="$(mas outdated 2>/dev/null || true)"
+    if [[ -n "$out" ]]; then
+      printf "%s\n" "$out"
+      mas upgrade
+    else
+      printf "All Mac App Store apps are up to date.\n"
+    fi
+  '
 fi
 
 # 3. Standalone CLI Tools
@@ -1004,7 +1031,10 @@ if (( ALLEYUP_NPM == 1 )) && has_working_cmd npm; then
 fi
 
 if (( ALLEYUP_PNPM == 1 )) && has_working_cmd pnpm; then
-  run_step "Global pnpm Packages" update_pnpm_globals
+  pnpm_out="$(pnpm list -g --depth=0 2>/dev/null || true)"
+  if [[ -n "$pnpm_out" ]] && [[ "$pnpm_out" != *"No global packages found"* ]]; then
+    run_step "Global pnpm Packages" pnpm update -g --latest
+  fi
 fi
 
 if (( ALLEYUP_RUSTUP == 1 )) && command -v rustup >/dev/null 2>&1; then

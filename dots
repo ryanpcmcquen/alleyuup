@@ -369,14 +369,21 @@ cmd_sync() {
 
   ensure_repo_dir
   cmd_brewfile
-  printf "\n${BLUE}==> Syncing machine configs (%s)${RESET}\n" "$REPO_DIR"
   git -C "$REPO_DIR" add -A
   if ! git -C "$REPO_DIR" diff --cached --quiet; then
+    printf "\n${BLUE}==> Syncing machine configs (%s)${RESET}\n" "$REPO_DIR"
     git -C "$REPO_DIR" commit -m "$msg"
-  else
-    printf "No local config changes to commit.\n"
-  fi
-  if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
+    if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
+      local branch
+      branch="$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+      [[ -z "$branch" ]] && branch="main"
+      git -C "$REPO_DIR" pull --rebase origin "$branch"
+      git -C "$REPO_DIR" push origin "$branch"
+      printf "${BOLD}${GREEN}✨ Machine configs synced!${RESET}\n"
+    else
+      printf "${YELLOW}⚠ No 'origin' git remote configured in %s; changes committed locally.${RESET}\n" "$REPO_DIR"
+    fi
+  elif [[ -n "$(git -C "$REPO_DIR" status --porcelain -b 2>/dev/null | grep '^## .*\[ahead ')" ]]; then
     local branch
     branch="$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null | head -n 1 | tr -d '[:space:]')"
     [[ -z "$branch" ]] && branch="main"
@@ -384,7 +391,7 @@ cmd_sync() {
     git -C "$REPO_DIR" push origin "$branch"
     printf "${BOLD}${GREEN}✨ Machine configs synced!${RESET}\n"
   else
-    printf "${YELLOW}⚠ No 'origin' git remote configured in %s; changes committed locally.${RESET}\n" "$REPO_DIR"
+    printf "${GREEN}✓ Machine configs (%s) already up to date.${RESET}\n" "$REPO_DIR"
   fi
 }
 
