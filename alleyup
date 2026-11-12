@@ -7,7 +7,7 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 # Disable interactive confirmation prompts in Homebrew
 export HOMEBREW_NO_ASK=1
 
-ALLEYUP_VERSION="1.0.12"
+ALLEYUP_VERSION="1.0.13"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -599,35 +599,39 @@ ensure_node_via_nvm() {
 
 update_npm_globals() {
   local pkgs=()
-  local list_out
-  list_out="$(npm list -g --depth=0 --parseable 2>/dev/null || true)"
+  local outdated_out
+  outdated_out="$(npm outdated -g --parseable 2>/dev/null || true)"
 
-  local root_dir=""
-  local line
+  local line pkg_path wanted current pkg
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    if [[ -z "$root_dir" ]]; then
-      root_dir="$line"
+    pkg_path="${line%%:*}"
+    # Skip symlinked local packages (e.g. file: links like scribe)
+    if [[ -L "$pkg_path" ]]; then
       continue
     fi
-    # Skip symlinked local packages (equivalent to file: links)
-    if [[ -L "$line" ]]; then
+    local rest="${line#*:}"
+    wanted="${rest%%:*}"
+    rest="${rest#*:}"
+    current="${rest%%:*}"
+    # Skip if current version already matches wanted/latest
+    if [[ "$wanted" == "$current" ]]; then
       continue
     fi
-    local pkg="${line#"${root_dir}/node_modules/"}"
-    [[ -z "$pkg" || "$pkg" == "$line" ]] && continue
+    pkg="${wanted%@*}"
+    [[ -z "$pkg" ]] && continue
     if (( ${#ALLEYUP_NPM_IGNORE[@]} > 0 )) && in_array "$pkg" "${ALLEYUP_NPM_IGNORE[@]}"; then
       printf "Skipping ignored global npm package: %s\n" "$pkg"
       continue
     fi
     pkgs+=("$pkg")
-  done <<<"$list_out"
+  done <<<"$outdated_out"
 
   if (( ${#pkgs[@]} > 0 )); then
-    printf "Updating global npm packages: %s\n" "${pkgs[*]}"
-    npm install -g --no-audit --no-fund --yes "${pkgs[@]/%/@latest}"
+    printf "Updating outdated global npm packages: %s\n" "${pkgs[*]}"
+    npm install -g --loglevel=error --no-audit --no-fund --yes "${pkgs[@]/%/@latest}"
   else
-    printf "No non-linked global npm packages to update.\n"
+    printf "All global npm packages are up to date.\n"
   fi
 }
 
@@ -759,9 +763,9 @@ update_local_projects() {
   local scribe_dir="$ALLEYUP_CODE_DIR/scribe"
   if [[ -f "$scribe_dir/package.json" ]] && has_working_cmd npm; then
     printf "Building scribe in %s...\n" "$scribe_dir"
-    if (cd "$scribe_dir" && npm install --no-audit --no-fund && npm run build); then
+    if (cd "$scribe_dir" && npm install --loglevel=error --no-audit --no-fund && npm run --silent build); then
       if ! command -v scribe >/dev/null 2>&1; then
-        (cd "$scribe_dir" && npm link) || true
+        (cd "$scribe_dir" && npm link --loglevel=error) || true
       fi
       printf "${GREEN}✓ Built scribe (%s)${RESET}\n" "$scribe_dir"
     else
