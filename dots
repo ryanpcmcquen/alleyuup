@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.0.5"
+DOTS_VERSION="1.1.0"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -15,7 +15,7 @@ REPO_CONFIG_FILE="$CONFIG_DIR/repo"
 
 # Tracked per-machine config mappings: <gist_filename>:<target_path_in_home>
 MAPPINGS=(
-  "alleyup.conf:$HOME/.config/alleyup/config"
+  "alleyuup.conf:$HOME/.config/alleyuup/config"
   "config.fish:$HOME/.config/fish/config.fish"
   "openclaw.fish:$HOME/.config/fish/conf.d/openclaw.fish"
   "config.nu:$HOME/.config/nushell/config.nu"
@@ -84,10 +84,10 @@ write_default_readme() {
   cat <<EOF > "$file"
 # Local Configs ($host)
 
-This private Gist tracks per-machine configurations and the \`Brewfile\` for **$host**, managed by \`dots\` and \`alleyup\`.
+This private Gist tracks per-machine configurations and the \`Brewfile\` for **$host**, managed by \`dots\` and \`alleyuup\`.
 
 ## Tracked Files
-- \`alleyup.conf\` -> \`~/.config/alleyup/config\` (per-machine toggles, package exclusions, and hooks for \`alleyup\`)
+- \`alleyuup.conf\` -> \`~/.config/alleyuup/config\` (per-machine toggles, package exclusions, and hooks for \`alleyuup\`)
 - \`config.fish\` -> \`~/.config/fish/config.fish\`
 - \`openclaw.fish\` -> \`~/.config/fish/conf.d/openclaw.fish\`
 - \`zprofile\` -> \`~/.zprofile\`
@@ -98,10 +98,10 @@ This private Gist tracks per-machine configurations and the \`Brewfile\` for **$
 ## Quick Setup on a Machine
 \`\`\`sh
 mkdir -p ~/code ~/bin
-# 1. Clone the shared alleyup & dots tools Gist:
+# 1. Clone the shared alleyuup & dots tools Gist:
 gh gist clone alleyuup-repo ~/code/alleyuup-repo
 ln -sfn ~/code/alleyuup-repo/dots ~/bin/dots
-ln -sfn ~/code/alleyuup-repo/alleyup ~/bin/alleyup
+ln -sfn ~/code/alleyuup-repo/alleyuup ~/bin/alleyuup
 
 # 2. Point dots at this machine's config Gist (or run 'dots repo new') and link:
 dots repo <machine-gist-id>
@@ -225,7 +225,7 @@ Manage and sync local configs with this machine's config repo:
   Config pointer file: $REPO_CONFIG_FILE
 
 Commands:
-  link              Symlink shared tools (alleyup, dots) and machine configs into \$HOME
+  link              Symlink shared tools (alleyuup, dots) and machine configs into \$HOME
   status, st        Show symlink health and git status of both machine & tools repos
   diff              Show uncommitted changes in the machine config repo
   brewfile          Refresh Brewfile in the machine config repo via 'brew bundle dump'
@@ -278,15 +278,15 @@ cmd_link() {
   local tools_dir=""
   if tools_dir="$(resolve_tools_dir)"; then
     printf "${BLUE}==> Linking shared scripts from %s${RESET}\n" "$tools_dir"
-    link_one "$tools_dir/alleyup" "$HOME/bin/alleyup"
+    link_one "$tools_dir/alleyuup" "$HOME/bin/alleyuup"
     link_one "$tools_dir/dots" "$HOME/bin/dots"
   fi
 
   ensure_repo_dir
 
-  # Ensure alleyup.conf exists in the machine repo so it can be linked and customized
-  if [[ ! -f "$REPO_DIR/alleyup.conf" ]] && [[ -x "$HOME/bin/alleyup" ]]; then
-    ALLEYUP_CONFIG="$REPO_DIR/alleyup.conf" "$HOME/bin/alleyup" --config >/dev/null 2>&1 || true
+  # Ensure alleyuup.conf exists in the machine repo so it can be linked and customized
+  if [[ ! -f "$REPO_DIR/alleyuup.conf" ]] && [[ -x "$HOME/bin/alleyuup" ]]; then
+    ALLEYUUP_CONFIG="$REPO_DIR/alleyuup.conf" "$HOME/bin/alleyuup" --config >/dev/null 2>&1 || true
   fi
 
   printf "\n${BLUE}==> Linking machine configs from %s${RESET}\n" "$REPO_DIR"
@@ -316,7 +316,7 @@ cmd_status() {
   local tools_dir=""
   if tools_dir="$(resolve_tools_dir)"; then
     printf "${BLUE}==> Shared Scripts (%s)${RESET}\n" "$tools_dir"
-    for tool in alleyup dots; do
+    for tool in alleyuup dots; do
       local target="$HOME/bin/$tool"
       local source_path="$tools_dir/$tool"
       if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$source_path" ]]; then

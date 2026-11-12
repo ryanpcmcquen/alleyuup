@@ -2,8 +2,8 @@
 set -euo pipefail
 
 TOOLS_GIST_ID="alleyuup-repo"
-TOOLS_DIR="${ALLEYUP_TOOLS_DIR:-$HOME/code/$TOOLS_GIST_ID}"
-BIN_DIR="${ALLEYUP_BIN_DIR:-$HOME/bin}"
+TOOLS_DIR="${ALLEYUUP_TOOLS_DIR:-$HOME/code/$TOOLS_GIST_ID}"
+BIN_DIR="${ALLEYUUP_BIN_DIR:-$HOME/bin}"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -11,7 +11,7 @@ GREEN="\033[1;32m"
 YELLOW="\033[1;33m"
 RESET="\033[0m"
 
-printf "${BLUE}==> Installing alleyup & dots...${RESET}\n"
+printf "${BLUE}==> Installing alleyuup & dots...${RESET}\n"
 mkdir -p "$HOME/code" "$BIN_DIR"
 
 if [[ -d "$TOOLS_DIR/.git" ]]; then
@@ -28,11 +28,11 @@ else
   fi
 fi
 
-chmod +x "$TOOLS_DIR/alleyup" "$TOOLS_DIR/dots"
-ln -sfn "$TOOLS_DIR/alleyup" "$BIN_DIR/alleyup"
+chmod +x "$TOOLS_DIR/alleyuup" "$TOOLS_DIR/dots"
+ln -sfn "$TOOLS_DIR/alleyuup" "$BIN_DIR/alleyuup"
 ln -sfn "$TOOLS_DIR/dots" "$BIN_DIR/dots"
 
-printf "${GREEN}✓ Linked:${RESET} %s/alleyup -> %s/alleyup\n" "$BIN_DIR" "$TOOLS_DIR"
+printf "${GREEN}✓ Linked:${RESET} %s/alleyuup -> %s/alleyuup\n" "$BIN_DIR" "$TOOLS_DIR"
 printf "${GREEN}✓ Linked:${RESET} %s/dots    -> %s/dots\n" "$BIN_DIR" "$TOOLS_DIR"
 
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -40,4 +40,4 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   printf "Run '${BOLD}%s/dots link${RESET}' to link your shell configs, or add %s to your PATH.\n" "$BIN_DIR" "$BIN_DIR"
 fi
 
-printf "\n${BOLD}${GREEN}✨ Installed!${RESET} Run '${BOLD}alleyup${RESET}' to upgrade, or '${BOLD}dots repo${RESET}' to connect this machine's config Gist.\n"
+printf "\n${BOLD}${GREEN}✨ Installed!${RESET} Run '${BOLD}alleyuup${RESET}' to upgrade, or '${BOLD}dots repo${RESET}' to connect this machine's config Gist.\n"
