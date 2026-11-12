@@ -18,6 +18,12 @@ dots repo   # Enter existing machine Gist ID, path, or 'new'
 dots link   # Symlinks all machine configs
 ```
 
+> **Switching from `alleyup` -> `alleyuup`**: On machines that had the older `alleyup` installed, remove the old symlink/config dir and re-run the installer:
+> ```sh
+> rm -rf ~/bin/alleyup ~/.config/alleyup
+> curl -fsSL https://gist.githubusercontent.com/ryanpcmcquen/alleyuup-repo/raw/install.sh | bash
+> ```
+
 ---
 
 ## Customizing `alleyuup` Per Machine (`~/.config/alleyuup/config`)
