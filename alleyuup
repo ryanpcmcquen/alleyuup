@@ -7,7 +7,7 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 # Disable interactive confirmation prompts in Homebrew
 export HOMEBREW_NO_ASK=1
 
-ALLEYUUP_VERSION="1.1.0"
+ALLEYUUP_VERSION="1.2.0"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -51,6 +51,7 @@ REPO_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dots/repo"
 : "${ALLEYUUP_SHELL:=1}"
 : "${ALLEYUUP_MACOS:=1}"
 : "${ALLEYUUP_MACOS_MAJOR:=0}"
+: "${ALLEYUUP_MACOS_CHECK_HOURS:=24}"
 
 # Tracked machine config files (<repo_filename>:<target_path_in_home>)
 ALLEYUUP_CONFIG_MAPPINGS=(
@@ -106,6 +107,13 @@ ALLEYUUP_REPO_IGNORE=()
 FAILED_STEPS=()
 NON_DEFAULT_REPOS=()
 REPO_PULL_ERRORS=()
+CLEANUP_PATHS=()
+
+LOCK_DIR="${TMPDIR:-/tmp}/alleyuup.lock"
+LOCK_HELD=0
+
+MACHINE_REPO_LOADED=0
+MACHINE_REPO_CACHE=""
 
 resolve_self_repo() {
   local source="${BASH_SOURCE[0]}"
@@ -124,7 +132,7 @@ resolve_self_repo() {
   return 1
 }
 
-get_machine_repo() {
+_resolve_machine_repo() {
   if [[ -n "${ALLEYUUP_REPO_DIR:-}" ]]; then
     local expanded="${ALLEYUUP_REPO_DIR/#\~/$HOME}"
     if [[ -d "$expanded" ]]; then
@@ -141,6 +149,21 @@ get_machine_repo() {
     fi
   fi
   return 1
+}
+
+# Memoized: resolve the machine repo path at most once per run
+get_machine_repo() {
+  if (( MACHINE_REPO_LOADED == 0 )); then
+    MACHINE_REPO_CACHE="$(_resolve_machine_repo 2>/dev/null || true)"
+    MACHINE_REPO_LOADED=1
+  fi
+  [[ -n "$MACHINE_REPO_CACHE" ]] || return 1
+  printf "%s\n" "$MACHINE_REPO_CACHE"
+}
+
+invalidate_machine_repo_cache() {
+  MACHINE_REPO_LOADED=0
+  MACHINE_REPO_CACHE=""
 }
 
 configure_machine_repo() {
@@ -212,6 +235,7 @@ configure_machine_repo() {
 
   mkdir -p "$(dirname "$REPO_CONFIG_FILE")"
   printf "%s\n" "$target_dir" > "$REPO_CONFIG_FILE"
+  invalidate_machine_repo_cache
   printf "${GREEN}✓ Saved machine config repo:${RESET} %s (stored in %s)\n" "$target_dir" "$REPO_CONFIG_FILE"
   sync_machine_repo
 }
@@ -298,6 +322,7 @@ ALLEYUUP_REPO_SYNC=1            # Collect local configs, commit, and push to mac
 ALLEYUUP_SHELL=1                # Update Fisher plugins and Fish completions
 ALLEYUUP_MACOS=1                # Run macOS software updates (minor/patch & security updates)
 ALLEYUUP_MACOS_MAJOR=0          # Allow major macOS version upgrades (0 = block major OS upgrades)
+ALLEYUUP_MACOS_CHECK_HOURS=24   # Reuse the macOS update scan for this many hours (0 = always rescan)
 
 # Default branches when checking git repos in ALLEYUUP_CODE_DIR:
 ALLEYUUP_DEFAULT_BRANCHES=("main" "master" "dev" "staging")
@@ -450,6 +475,51 @@ in_array() {
   return 1
 }
 
+acquire_lock() {
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" > "$LOCK_DIR/pid"
+    LOCK_HELD=1
+    return 0
+  fi
+
+  local holder=""
+  if [[ -f "$LOCK_DIR/pid" ]]; then
+    holder="$(head -n 1 "$LOCK_DIR/pid" 2>/dev/null | tr -d '\r\n' || true)"
+  fi
+
+  if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+    printf "${YELLOW}⚠ alleyuup is already running (pid %s); skipping this run.${RESET}\n" "$holder"
+    return 1
+  fi
+
+  # Stale lock from an interrupted run
+  rm -rf "$LOCK_DIR"
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" > "$LOCK_DIR/pid"
+    LOCK_HELD=1
+    return 0
+  fi
+
+  printf "${YELLOW}⚠ Could not acquire lock %s; skipping this run.${RESET}\n" "$LOCK_DIR"
+  return 1
+}
+
+release_lock() {
+  if (( LOCK_HELD == 1 )); then
+    rm -rf "$LOCK_DIR"
+    LOCK_HELD=0
+  fi
+}
+
+cleanup() {
+  release_lock
+  if (( ${#CLEANUP_PATHS[@]} > 0 )); then
+    rm -rf "${CLEANUP_PATHS[@]}" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT INT TERM
+
 # Verify a command exists AND is not a broken '#!/usr/bin/env node' wrapper on a machine without node
 has_working_cmd() {
   local cmd="$1"
@@ -481,6 +551,7 @@ self_update_tools() {
         after_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
         if [[ -n "$before_sha" ]] && [[ "$before_sha" != "$after_sha" ]]; then
           printf "Updated alleyuup & dots (%s -> %s); restarting alleyuup with new version...\n" "${before_sha:0:7}" "${after_sha:0:7}"
+          release_lock
           if (( ${#ORIG_ARGS[@]} > 0 )); then
             exec "$0" --no-self-update "${ORIG_ARGS[@]}"
           else
@@ -507,6 +578,7 @@ self_update_tools() {
         local new_ver
         new_ver="$(awk -F'"' '/^ALLEYUUP_VERSION=/{print $2; exit}' "$self_path")"
         printf "Updated standalone alleyuup to v%s; restarting alleyuup with new version...\n" "${new_ver:-latest}"
+        release_lock
         if (( ${#ORIG_ARGS[@]} > 0 )); then
           exec "$self_path" --no-self-update "${ORIG_ARGS[@]}"
         else
@@ -623,13 +695,22 @@ update_npm_globals() {
   fi
 }
 
-update_pnpm_globals() {
-  local out
-  out="$(pnpm list -g --depth=0 2>/dev/null || true)"
-  if [[ -n "$out" ]] && [[ "$out" != *"No global packages found"* ]]; then
-    pnpm update -g --latest
+run_repo_pull() {
+  local dir="$1"
+  local out="$2"
+  local before="" after="" pull_out="" status=0
+
+  before="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "")"
+
+  if pull_out="$(git -C "$dir" pull --all --quiet 2>&1)"; then
+    after="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "")"
+    printf 'OK\t%s\t%s\n' "$before" "$after" > "$out"
   else
-    printf "No global pnpm packages installed.\n"
+    status=$?
+    printf 'FAIL\t%s\n' "$status" > "$out"
+    if [[ -n "$pull_out" ]]; then
+      printf '%s\n' "$pull_out" > "$out.detail"
+    fi
   fi
 }
 
@@ -643,7 +724,14 @@ update_code_repos() {
   self_repo="$(resolve_self_repo 2>/dev/null || true)"
   machine_repo="$(get_machine_repo 2>/dev/null || true)"
 
-  local dir
+  local work_dir
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/alleyuup-repos.XXXXXX")" || {
+    printf "Could not create temp dir; skipping repository pulls.\n"
+    return 0
+  }
+  CLEANUP_PATHS+=("$work_dir")
+
+  local idx=0 dir
   while IFS= read -r dir; do
     [[ -z "$dir" ]] && continue
     if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
@@ -653,71 +741,118 @@ update_code_repos() {
       continue
     fi
 
-    # Skip the shared tools Gist and machine config Gist (already managed in dedicated steps)
+    # Skip the shared tools Gist and machine config Gist (managed in dedicated steps)
     local abs_dir
     abs_dir="$(cd -P "$dir" 2>/dev/null && pwd || echo "$dir")"
     if [[ -n "$self_repo" && "$abs_dir" == "$self_repo" ]] || [[ -n "$machine_repo" && "$abs_dir" == "$machine_repo" ]]; then
       continue
     fi
 
-    local repo_name
+    local repo_name current_branch branch_label dirty_count dirty_note=""
     repo_name="$(basename "$dir")"
-    if (( ${#ALLEYUUP_REPO_IGNORE[@]} > 0 )) && in_array "$repo_name" "${ALLEYUUP_REPO_IGNORE[@]}"; then
-      printf "  - %-22s %-28s skipped (ignored)\n" "$repo_name" ""
-      continue
-    fi
-
-    local current_branch branch_label is_default_branch=1
     current_branch="$(git -C "$dir" branch --show-current 2>/dev/null || echo "")"
     branch_label="[${current_branch:-(detached)}]"
-
-    if [[ -z "$current_branch" ]] || ! in_array "$current_branch" "${ALLEYUUP_DEFAULT_BRANCHES[@]}"; then
-      is_default_branch=0
-      NON_DEFAULT_REPOS+=("- ${repo_name}: ${current_branch:-(detached)}")
-    fi
-
-    local dirty_count dirty_note=""
     dirty_count="$(git -C "$dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
     if (( dirty_count > 0 )); then
       dirty_note=" (${dirty_count} dirty)"
     fi
 
-    local remotes
-    remotes="$(git -C "$dir" remote 2>/dev/null || true)"
-    if [[ -z "$remotes" ]]; then
-      printf "  - %-22s ${CYAN}%-28s${RESET} skipped (no remote)%s\n" "$repo_name" "$branch_label" "$dirty_note"
-      continue
+    local is_default_branch=1
+    if [[ -z "$current_branch" ]] || ! in_array "$current_branch" "${ALLEYUUP_DEFAULT_BRANCHES[@]}"; then
+      is_default_branch=0
+      NON_DEFAULT_REPOS+=("- ${repo_name}: ${current_branch:-(detached)}")
     fi
 
-    local origin_url
-    origin_url="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
-    if [[ "$origin_url" == /* ]] && [[ ! -e "$origin_url" ]]; then
-      printf "  ${YELLOW}-${RESET} %-22s ${CYAN}%-28s${RESET} skipped (missing local remote)%s\n" "$repo_name" "$branch_label" "$dirty_note"
-      continue
-    fi
-
-    local before_sha after_sha pull_out
-    before_sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "")"
-    if pull_out="$(git -C "$dir" pull --all --quiet 2>&1)"; then
-      after_sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "")"
-      local state_text="up to date"
-      if [[ -n "$before_sha" && -n "$after_sha" && "$before_sha" != "$after_sha" ]]; then
-        state_text="${GREEN}updated (${before_sha} -> ${after_sha})${RESET}"
+    # Local (non-network) reasons to skip the pull
+    local skip_reason=""
+    if (( ${#ALLEYUUP_REPO_IGNORE[@]} > 0 )) && in_array "$repo_name" "${ALLEYUUP_REPO_IGNORE[@]}"; then
+      skip_reason="ignored"
+    else
+      local remotes=""
+      remotes="$(git -C "$dir" remote 2>/dev/null || true)"
+      if [[ -z "$remotes" ]]; then
+        skip_reason="no remote"
+      else
+        local origin_url=""
+        origin_url="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
+        if [[ "$origin_url" == /* ]] && [[ ! -e "$origin_url" ]]; then
+          skip_reason="missing local remote"
+        fi
       fi
-      if (( is_default_branch == 1 )); then
+    fi
+
+    {
+      printf '%s\n' "$repo_name"
+      printf '%s\n' "$branch_label"
+      printf '%s\n' "$is_default_branch"
+      printf '%s\n' "$dirty_note"
+      printf '%s\n' "$skip_reason"
+    } > "$work_dir/$idx.meta"
+
+    if [[ -z "$skip_reason" ]]; then
+      (
+        if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
+          export GIT_SSH_COMMAND="ssh -o BatchMode=yes"
+        fi
+        export GIT_TERMINAL_PROMPT=0
+        run_repo_pull "$dir" "$work_dir/$idx.result"
+      ) >/dev/null 2>&1 &
+    fi
+
+    idx=$((idx + 1))
+  done < <(find "$ALLEYUUP_CODE_DIR" -maxdepth 2 -type d -not -name '.git' | sort)
+
+  if (( idx > 0 )); then
+    wait
+  fi
+
+  local i repo_name branch_label is_default_branch dirty_note skip_reason
+  for (( i = 0; i < idx; i++ )); do
+    local meta_file="$work_dir/$i.meta"
+    [[ -f "$meta_file" ]] || continue
+    {
+      IFS= read -r repo_name
+      IFS= read -r branch_label
+      IFS= read -r is_default_branch
+      IFS= read -r dirty_note
+      IFS= read -r skip_reason
+    } < "$meta_file"
+
+    if [[ -n "$skip_reason" ]]; then
+      printf "  - %-22s ${CYAN}%-28s${RESET} skipped (%s)%s\n" "$repo_name" "$branch_label" "$skip_reason" "$dirty_note"
+      continue
+    fi
+
+    local result_file="$work_dir/$i.result"
+    if [[ ! -f "$result_file" ]]; then
+      REPO_PULL_ERRORS+=("- ${repo_name} (no result)")
+      printf "  ${RED}✗${RESET} %-22s ${CYAN}%-28s${RESET} ${RED}pull did not complete${RESET}%s\n" "$repo_name" "$branch_label" "$dirty_note"
+      continue
+    fi
+
+    local state="" sha_before="" sha_after=""
+    { IFS=$'\t' read -r state sha_before sha_after; } < "$result_file"
+
+    if [[ "$state" == "OK" ]]; then
+      local state_text="up to date"
+      if [[ -n "$sha_before" && -n "$sha_after" && "$sha_before" != "$sha_after" ]]; then
+        state_text="${GREEN}updated (${sha_before} -> ${sha_after})${RESET}"
+      fi
+      if [[ "$is_default_branch" == "1" ]]; then
         printf "  ${GREEN}✓${RESET} %-22s ${CYAN}%-28s${RESET} %b%s\n" "$repo_name" "$branch_label" "$state_text" "$dirty_note"
       else
         printf "  ${YELLOW}⚠${RESET} %-22s ${YELLOW}%-28s${RESET} %b%s ${YELLOW}(non-default branch)${RESET}\n" "$repo_name" "$branch_label" "$state_text" "$dirty_note"
       fi
     else
-      local status=$?
-      REPO_PULL_ERRORS+=("- ${repo_name} (exit ${status})")
-      printf "  ${RED}✗${RESET} %-22s ${CYAN}%-28s${RESET} ${RED}pull failed (exit %d)${RESET}%s\n" "$repo_name" "$branch_label" "$status" "$dirty_note"
-      if [[ -n "$pull_out" ]]; then
-        printf "      %s\n" "${pull_out//$'\n'/$'\n      '}"
+      REPO_PULL_ERRORS+=("- ${repo_name} (exit ${sha_before})")
+      printf "  ${RED}✗${RESET} %-22s ${CYAN}%-28s${RESET} ${RED}pull failed (exit %s)${RESET}%s\n" "$repo_name" "$branch_label" "$sha_before" "$dirty_note"
+      if [[ -f "$result_file.detail" ]]; then
+        sed 's/^/      /' "$result_file.detail"
       fi
     fi
-  done < <(find "$ALLEYUUP_CODE_DIR" -maxdepth 2 -type d -not -name '.git' | sort)
+  done
+
+  rm -rf "$work_dir"
 
   printf "\n"
   if (( ${#NON_DEFAULT_REPOS[@]} > 0 )); then
@@ -880,6 +1015,10 @@ sync_machine_repo() {
   fi
 }
 
+macos_scan_cache_file() {
+  printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/alleyuup/macos-update-scan"
+}
+
 update_macos() {
   if (( ALLEYUUP_MACOS_MAJOR == 1 )); then
     softwareupdate -i -a --agree-to-license
@@ -890,9 +1029,35 @@ update_macos() {
   current_ver="$(sw_vers -productVersion 2>/dev/null || echo "")"
   current_major="${current_ver%%.*}"
 
-  printf "Checking for macOS updates (current: macOS %s; major upgrades blocked)...\n" "${current_ver:-unknown}"
-  local list_out
-  list_out="$(softwareupdate -l 2>&1 || true)"
+  local cache_file max_hours list_out
+  cache_file="$(macos_scan_cache_file)"
+  max_hours="${ALLEYUUP_MACOS_CHECK_HOURS:-24}"
+  [[ "$max_hours" =~ ^[0-9]+$ ]] || max_hours=24
+
+  list_out=""
+  if (( max_hours > 0 )) && [[ -f "$cache_file" ]]; then
+    local now mtime age
+    now="$(date +%s)"
+    mtime="$(stat -f %m "$cache_file" 2>/dev/null || echo 0)"
+    if [[ "$mtime" =~ ^[0-9]+$ ]] && (( mtime > 0 )); then
+      age=$(( now - mtime ))
+      if (( age >= 0 && age < max_hours * 3600 )); then
+        list_out="$(cat "$cache_file" 2>/dev/null || true)"
+        if [[ -n "$list_out" ]]; then
+          printf "Using macOS update scan cached %dm ago (ALLEYUUP_MACOS_CHECK_HOURS=%d).\n" "$(( age / 60 ))" "$max_hours"
+        fi
+      fi
+    fi
+  fi
+
+  if [[ -z "$list_out" ]]; then
+    printf "Checking for macOS updates (current: macOS %s; major upgrades blocked)...\n" "${current_ver:-unknown}"
+    list_out="$(softwareupdate -l 2>&1 || true)"
+    if (( max_hours > 0 )); then
+      mkdir -p "$(dirname "$cache_file")" 2>/dev/null || true
+      printf '%s\n' "$list_out" > "$cache_file" 2>/dev/null || true
+    fi
+  fi
 
   if grep -q "No new software available" <<<"$list_out"; then
     printf "No new macOS software updates available.\n"
@@ -951,6 +1116,8 @@ update_macos() {
   if (( ${#labels[@]} > 0 )); then
     printf "Installing macOS updates: %s\n" "${labels[*]}"
     softwareupdate -i --agree-to-license "${labels[@]}"
+    # Force a fresh scan next run so we don't act on stale labels
+    rm -f "$cache_file" 2>/dev/null || true
   else
     printf "No minor/security macOS updates to install.\n"
   fi
@@ -959,6 +1126,10 @@ update_macos() {
 # Handle --repo after all helper functions are defined
 if (( RUN_CONFIGURE_REPO == 1 )); then
   configure_machine_repo "$CONFIGURE_REPO_TARGET"
+  exit 0
+fi
+
+if ! acquire_lock; then
   exit 0
 fi
 

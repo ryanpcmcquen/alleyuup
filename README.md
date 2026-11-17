@@ -72,6 +72,11 @@ alleyuup --config        # Open ~/.config/alleyuup/config in $EDITOR
 alleyuup --print-config  # Print active ~/.config/alleyuup/config
 ```
 
+Notes:
+- Repository pulls run in parallel, and only repos whose local `HEAD` moved are reported as `updated`.
+- The macOS update scan is cached for `ALLEYUUP_MACOS_CHECK_HOURS` (default `24`) so `softwareupdate -l` is not paid on every run. Set it to `0` to always rescan.
+- A lock prevents overlapping runs, so two logins can't collide on Homebrew, npm, or the Gist.
+
 ### `dots`
 ```sh
 dots status             # Show symlink health & git status for both tools and machine Gists
@@ -80,5 +85,6 @@ dots sync [msg]         # Refresh Brewfile, commit machine config changes, and p
 dots pull               # Pull latest changes for both tools and machine Gists & re-link
 dots link               # Symlink alleyuup, dots, and all machine config files
 dots add <file> [name]  # Track a new config file in the machine Gist
+dots clean [keep]       # Prune stale '.bak.<timestamp>' backups (keeps newest 3)
 dots repo [target]      # View or change the machine's config Gist
 ```
