@@ -7,7 +7,7 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 # Disable interactive confirmation prompts in Homebrew
 export HOMEBREW_NO_ASK=1
 
-ALLEYUUP_VERSION="1.2.0"
+ALLEYUUP_VERSION="1.3.0"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -21,6 +21,31 @@ RESET="\033[0m"
 
 CONFIG_FILE="${ALLEYUUP_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/alleyuup/config}"
 REPO_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dots/repo"
+
+# --- Environment overrides -------------------------------------------------
+# Snapshot ALLEYUUP_* values that were supplied in the environment so they win
+# over the per-machine config file.
+# Precedence: defaults < ~/.config/alleyuup/config < environment < CLI flags.
+ALLEYUUP_OVERRIDABLE_VARS=(
+  ALLEYUUP_SELF_UPDATE ALLEYUUP_BREW ALLEYUUP_BREW_FORMULA ALLEYUUP_BREW_CASK
+  ALLEYUUP_BREW_GREEDY ALLEYUUP_BREW_CLEANUP ALLEYUUP_MAS ALLEYUUP_AGY
+  ALLEYUUP_CLAUDE ALLEYUUP_OPENCODE_STANDALONE ALLEYUUP_OPENCLAW ALLEYUUP_NVM
+  ALLEYUUP_NPM ALLEYUUP_PNPM ALLEYUUP_RUSTUP ALLEYUUP_UV ALLEYUUP_PIPX
+  ALLEYUUP_GH_EXT ALLEYUUP_CODE_REPOS ALLEYUUP_CODE_DIR ALLEYUUP_LOCAL_PROJECTS
+  ALLEYUUP_BREWFILE ALLEYUUP_REPO_SYNC ALLEYUUP_SHELL ALLEYUUP_MACOS
+  ALLEYUUP_MACOS_MAJOR ALLEYUUP_MACOS_CHECK_HOURS ALLEYUUP_REPO_DIR
+  ALLEYUUP_DRY_RUN ALLEYUUP_LOG
+)
+ALLEYUUP_ENV_NAMES=()
+ALLEYUUP_ENV_VALUES=()
+for _alleyuup_env_var in "${ALLEYUUP_OVERRIDABLE_VARS[@]}"; do
+  if [[ -n "${!_alleyuup_env_var+x}" ]]; then
+    ALLEYUUP_ENV_NAMES+=("$_alleyuup_env_var")
+    ALLEYUUP_ENV_VALUES+=("${!_alleyuup_env_var}")
+  fi
+done
+unset _alleyuup_env_var
+
 : "${ALLEYUUP_REPO_DIR:=${DOTFILES_GIST_DIR:-}}"
 
 # Default step toggles (1 = enabled, 0 = disabled).
@@ -52,6 +77,8 @@ REPO_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dots/repo"
 : "${ALLEYUUP_MACOS:=1}"
 : "${ALLEYUUP_MACOS_MAJOR:=0}"
 : "${ALLEYUUP_MACOS_CHECK_HOURS:=24}"
+: "${ALLEYUUP_DRY_RUN:=0}"
+: "${ALLEYUUP_LOG:=}"
 
 # Tracked machine config files (<repo_filename>:<target_path_in_home>)
 ALLEYUUP_CONFIG_MAPPINGS=(
@@ -97,6 +124,12 @@ ALLEYUUP_CONFIG_MAPPINGS=(
 
 # Default branch names for ~/code repo checks (can be overridden in ~/.config/alleyuup/config)
 ALLEYUUP_DEFAULT_BRANCHES=("main" "master" "dev" "staging")
+
+# Step keys accepted by --only / --skip
+ALLEYUUP_STEP_KEYS=(
+  self-update brew mas agy claude opencode openclaw nvm npm pnpm rustup uv pipx
+  gh-ext repos local-projects brewfile repo-sync shell macos
+)
 
 # Optional exclusion arrays (can be populated in ~/.config/alleyuup/config)
 ALLEYUUP_BREW_IGNORE=()
@@ -345,6 +378,9 @@ ALLEYUUP_REPO_IGNORE=()
 #   # Commands to run after standard upgrade steps
 #   :
 # }
+
+# Optional: tee output to a log file (uncomment to enable)
+# ALLEYUUP_LOG="$HOME/Library/Logs/alleyuup.log"
 EOF
 }
 
@@ -369,12 +405,20 @@ Options:
   --no-macos, --fast   Skip macOS system software updates (softwareupdate)
   --no-repos           Skip pulling git repositories in ~/code
   --no-self-update     Skip pulling latest alleyuup & dots from the tools Gist
+  --dry-run, -n        Report what would change without changing anything
+  --only <steps>       Run only the listed steps (comma-separated)
+  --skip <steps>       Skip the listed steps (comma-separated)
   --repo [target]      Configure this machine's config/Brewfile repo (path, Gist ID/URL, or 'new')
   --config, --edit     Open $CONFIG_FILE in \$EDITOR (creates default if missing)
   --print-config       Print the path and contents of $CONFIG_FILE
+  --print-steps        Print resolved step toggles and exit
+  --print-mappings     Print tracked config file mappings and exit
   --check              Check version and whether a newer version is available on remote
   -v, --version        Print alleyuup version and git revision
   -h, --help           Show this help message
+
+Steps for --only/--skip:
+  ${ALLEYUUP_STEP_KEYS[*]}
 EOF
 }
 
@@ -384,9 +428,21 @@ if [[ -f "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
 
+# Re-apply environment overrides so env beats the config file
+if (( ${#ALLEYUUP_ENV_NAMES[@]} > 0 )); then
+  for ((_alleyuup_i = 0; _alleyuup_i < ${#ALLEYUUP_ENV_NAMES[@]}; _alleyuup_i++)); do
+    printf -v "${ALLEYUUP_ENV_NAMES[$_alleyuup_i]}" '%s' "${ALLEYUUP_ENV_VALUES[$_alleyuup_i]}"
+  done
+  unset _alleyuup_i
+fi
+
 ORIG_ARGS=("$@")
 CONFIGURE_REPO_TARGET=""
 RUN_CONFIGURE_REPO=0
+ONLY_STEPS=""
+SKIP_STEPS=""
+PRINT_STEPS=0
+PRINT_MAPPINGS=0
 while (( $# > 0 )); do
   arg="$1"
   shift
@@ -399,6 +455,29 @@ while (( $# > 0 )); do
       ;;
     --no-self-update)
       ALLEYUUP_SELF_UPDATE=0
+      ;;
+    --dry-run|-n)
+      ALLEYUUP_DRY_RUN=1
+      ;;
+    --only)
+      ONLY_STEPS="${1:-}"
+      (( $# > 0 )) && shift
+      ;;
+    --only=*)
+      ONLY_STEPS="${arg#--only=}"
+      ;;
+    --skip)
+      SKIP_STEPS="${1:-}"
+      (( $# > 0 )) && shift
+      ;;
+    --skip=*)
+      SKIP_STEPS="${arg#--skip=}"
+      ;;
+    --print-steps)
+      PRINT_STEPS=1
+      ;;
+    --print-mappings)
+      PRINT_MAPPINGS=1
       ;;
     --repo)
       RUN_CONFIGURE_REPO=1
@@ -465,6 +544,18 @@ run_step() {
   fi
 }
 
+# Run a mutating step, or just report it when --dry-run is active
+run_or_plan() {
+  local name="$1"
+  shift
+  if is_dry_run; then
+    section "$name"
+    printf "Would run: %s\n" "$*"
+    return 0
+  fi
+  run_step "$name" "$@"
+}
+
 in_array() {
   local needle="$1"
   shift
@@ -519,6 +610,100 @@ cleanup() {
 }
 
 trap cleanup EXIT INT TERM
+
+step_var_for() {
+  case "$1" in
+    self-update|selfupdate|self) printf 'ALLEYUUP_SELF_UPDATE\n' ;;
+    brew) printf 'ALLEYUUP_BREW\n' ;;
+    mas|app-store) printf 'ALLEYUUP_MAS\n' ;;
+    agy|antigravity) printf 'ALLEYUUP_AGY\n' ;;
+    claude) printf 'ALLEYUUP_CLAUDE\n' ;;
+    opencode) printf 'ALLEYUUP_OPENCODE_STANDALONE\n' ;;
+    openclaw) printf 'ALLEYUUP_OPENCLAW\n' ;;
+    nvm) printf 'ALLEYUUP_NVM\n' ;;
+    npm) printf 'ALLEYUUP_NPM\n' ;;
+    pnpm) printf 'ALLEYUUP_PNPM\n' ;;
+    rustup|rust) printf 'ALLEYUUP_RUSTUP\n' ;;
+    uv) printf 'ALLEYUUP_UV\n' ;;
+    pipx) printf 'ALLEYUUP_PIPX\n' ;;
+    gh-ext|gh) printf 'ALLEYUUP_GH_EXT\n' ;;
+    repos) printf 'ALLEYUUP_CODE_REPOS\n' ;;
+    local-projects) printf 'ALLEYUUP_LOCAL_PROJECTS\n' ;;
+    brewfile) printf 'ALLEYUUP_BREWFILE\n' ;;
+    repo-sync|configs) printf 'ALLEYUUP_REPO_SYNC\n' ;;
+    shell) printf 'ALLEYUUP_SHELL\n' ;;
+    macos|os) printf 'ALLEYUUP_MACOS\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+apply_step_filters() {
+  local key var list
+  if [[ -n "${ONLY_STEPS:-}" ]]; then
+    for key in "${ALLEYUUP_STEP_KEYS[@]}"; do
+      var="$(step_var_for "$key")" || continue
+      printf -v "$var" '%s' 0
+    done
+    list="${ONLY_STEPS// /}"
+    local IFS=','
+    for key in $list; do
+      [[ -z "$key" ]] && continue
+      if ! var="$(step_var_for "$key")"; then
+        printf "${RED}Unknown step for --only: %s${RESET}\n" "$key" >&2
+        printf "Valid steps: %s\n" "${ALLEYUUP_STEP_KEYS[*]}" >&2
+        return 1
+      fi
+      printf -v "$var" '%s' 1
+    done
+  fi
+
+  if [[ -n "${SKIP_STEPS:-}" ]]; then
+    list="${SKIP_STEPS// /}"
+    local IFS=','
+    for key in $list; do
+      [[ -z "$key" ]] && continue
+      if ! var="$(step_var_for "$key")"; then
+        printf "${RED}Unknown step for --skip: %s${RESET}\n" "$key" >&2
+        printf "Valid steps: %s\n" "${ALLEYUUP_STEP_KEYS[*]}" >&2
+        return 1
+      fi
+      printf -v "$var" '%s' 0
+    done
+  fi
+  return 0
+}
+
+print_steps() {
+  local key var
+  for key in "${ALLEYUUP_STEP_KEYS[@]}"; do
+    var="$(step_var_for "$key")" || continue
+    printf '%s=%s\n' "$var" "${!var}"
+  done
+  printf 'ALLEYUUP_DRY_RUN=%s\n' "$ALLEYUUP_DRY_RUN"
+}
+
+print_mappings() {
+  local entry
+  for entry in "${ALLEYUUP_CONFIG_MAPPINGS[@]}"; do
+    printf '%s\n' "$entry"
+  done
+}
+
+start_logging() {
+  [[ -n "${ALLEYUUP_LOG:-}" ]] || return 0
+  local log_file="$ALLEYUUP_LOG"
+  if [[ "$log_file" == "1" ]]; then
+    log_file="$HOME/Library/Logs/alleyuup.log"
+  fi
+  log_file="${log_file/#\~/$HOME}"
+  mkdir -p "$(dirname "$log_file")" 2>/dev/null || return 0
+  printf '\n===== alleyuup %s (%s) =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(date '+%Z')" >> "$log_file"
+  exec > >(tee -a "$log_file") 2>&1
+}
+
+is_dry_run() {
+  (( ALLEYUUP_DRY_RUN == 1 ))
+}
 
 # Verify a command exists AND is not a broken '#!/usr/bin/env node' wrapper on a machine without node
 has_working_cmd() {
@@ -597,7 +782,9 @@ self_update_tools() {
 }
 
 update_homebrew() {
-  brew update
+  if ! is_dry_run; then
+    brew update
+  fi
 
   if (( ALLEYUUP_BREW_FORMULA == 1 )); then
     local formulas=()
@@ -610,7 +797,11 @@ update_homebrew() {
       fi
     done < <(brew outdated --formula --quiet)
     if (( ${#formulas[@]} > 0 )); then
-      brew upgrade --formula --no-ask "${formulas[@]}"
+      if is_dry_run; then
+        printf "Would upgrade formulas: %s\n" "${formulas[*]}"
+      else
+        brew upgrade --formula --no-ask "${formulas[@]}"
+      fi
     else
       printf "All Homebrew formulas are up to date.\n"
     fi
@@ -629,7 +820,9 @@ update_homebrew() {
       fi
     done < <("${out_cmd[@]}")
     if (( ${#casks[@]} > 0 )); then
-      if (( ALLEYUUP_BREW_GREEDY == 1 )); then
+      if is_dry_run; then
+        printf "Would upgrade casks: %s\n" "${casks[*]}"
+      elif (( ALLEYUUP_BREW_GREEDY == 1 )); then
         brew upgrade --cask --greedy --no-ask "${casks[@]}"
       else
         brew upgrade --cask --no-ask "${casks[@]}"
@@ -640,7 +833,11 @@ update_homebrew() {
   fi
 
   if (( ALLEYUUP_BREW_CLEANUP == 1 )); then
-    brew cleanup --prune=all
+    if is_dry_run; then
+      printf "Would run: brew cleanup --prune=all\n"
+    else
+      brew cleanup --prune=all
+    fi
   fi
 }
 
@@ -652,9 +849,33 @@ ensure_node_via_nvm() {
       source "$NVM_DIR/nvm.sh"
     fi
     if command -v nvm >/dev/null 2>&1; then
-      run_step "Node LTS via nvm" nvm install --lts
+      run_or_plan "Node LTS via nvm" nvm install --lts
     fi
   fi
+}
+
+# Parse `npm outdated -g --parseable` output into package names.
+# Fields: <path>:<name>@<current>:<name>@<wanted>:<name>@<latest>:<location>
+# Skips symlinked local packages and packages already at the wanted version.
+parse_npm_outdated() {
+  local line pkg_path rest current wanted pkg
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    pkg_path="${line%%:*}"
+    if [[ -L "$pkg_path" ]]; then
+      continue
+    fi
+    rest="${line#*:}"
+    current="${rest%%:*}"
+    rest="${rest#*:}"
+    wanted="${rest%%:*}"
+    if [[ "$current" == "$wanted" ]]; then
+      continue
+    fi
+    pkg="${current%@*}"
+    [[ -z "$pkg" ]] && continue
+    printf '%s\n' "$pkg"
+  done
 }
 
 update_npm_globals() {
@@ -662,34 +883,23 @@ update_npm_globals() {
   local outdated_out
   outdated_out="$(npm outdated -g --parseable 2>/dev/null || true)"
 
-  local line pkg_path wanted current pkg
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    pkg_path="${line%%:*}"
-    # Skip symlinked local packages (e.g. file: links like scribe)
-    if [[ -L "$pkg_path" ]]; then
-      continue
-    fi
-    local rest="${line#*:}"
-    wanted="${rest%%:*}"
-    rest="${rest#*:}"
-    current="${rest%%:*}"
-    # Skip if current version already matches wanted/latest
-    if [[ "$wanted" == "$current" ]]; then
-      continue
-    fi
-    pkg="${wanted%@*}"
+  local pkg
+  while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     if (( ${#ALLEYUUP_NPM_IGNORE[@]} > 0 )) && in_array "$pkg" "${ALLEYUUP_NPM_IGNORE[@]}"; then
       printf "Skipping ignored global npm package: %s\n" "$pkg"
       continue
     fi
     pkgs+=("$pkg")
-  done <<<"$outdated_out"
+  done < <(printf '%s\n' "$outdated_out" | parse_npm_outdated)
 
   if (( ${#pkgs[@]} > 0 )); then
-    printf "Updating outdated global npm packages: %s\n" "${pkgs[*]}"
-    npm install -g --loglevel=error --no-audit --no-fund --yes "${pkgs[@]/%/@latest}"
+    if is_dry_run; then
+      printf "Would update global npm packages: %s\n" "${pkgs[*]}"
+    else
+      printf "Updating outdated global npm packages: %s\n" "${pkgs[*]}"
+      npm install -g --loglevel=error --no-audit --no-fund --yes "${pkgs[@]/%/@latest}"
+    fi
   else
     printf "All global npm packages are up to date.\n"
   fi
@@ -699,6 +909,18 @@ run_repo_pull() {
   local dir="$1"
   local out="$2"
   local before="" after="" pull_out="" status=0
+
+  if is_dry_run; then
+    if git -C "$dir" fetch --all --quiet 2>/dev/null; then
+      local behind=0
+      behind="$(git -C "$dir" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)"
+      printf 'DRY\t%s\t\n' "$behind" > "$out"
+    else
+      status=$?
+      printf 'FAIL\t%s\n' "$status" > "$out"
+    fi
+    return 0
+  fi
 
   before="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "")"
 
@@ -833,7 +1055,17 @@ update_code_repos() {
     local state="" sha_before="" sha_after=""
     { IFS=$'\t' read -r state sha_before sha_after; } < "$result_file"
 
-    if [[ "$state" == "OK" ]]; then
+    if [[ "$state" == "DRY" ]]; then
+      local dry_text="up to date"
+      if [[ -n "$sha_before" && "$sha_before" != "0" ]]; then
+        dry_text="would pull (${sha_before} behind)"
+      fi
+      if [[ "$is_default_branch" == "1" ]]; then
+        printf "  ${GREEN}✓${RESET} %-22s ${CYAN}%-28s${RESET} %s (dry-run)%s\n" "$repo_name" "$branch_label" "$dry_text" "$dirty_note"
+      else
+        printf "  ${YELLOW}⚠${RESET} %-22s ${YELLOW}%-28s${RESET} %s (dry-run)%s ${YELLOW}(non-default branch)${RESET}\n" "$repo_name" "$branch_label" "$dry_text" "$dirty_note"
+      fi
+    elif [[ "$state" == "OK" ]]; then
       local state_text="up to date"
       if [[ -n "$sha_before" && -n "$sha_after" && "$sha_before" != "$sha_after" ]]; then
         state_text="${GREEN}updated (${sha_before} -> ${sha_after})${RESET}"
@@ -878,21 +1110,29 @@ update_local_projects() {
     elif [[ -n "$(find "$flint_dir/source" "$flint_dir/Makefile" -newer "$flint_dir/flint" 2>/dev/null | head -n 1)" ]]; then
       need_flint=1
     elif ! cmp -s "$flint_dir/flint" "$HOME/bin/flint"; then
-      mkdir -p "$HOME/bin"
-      cp -f "$flint_dir/flint" "$HOME/bin/flint"
-      copied_flint=1
-      printf "${GREEN}✓ Installed %s/bin/flint${RESET}\n" "$HOME"
+      if is_dry_run; then
+        printf "Would install updated flint binary to %s/bin/flint.\n" "$HOME"
+      else
+        mkdir -p "$HOME/bin"
+        cp -f "$flint_dir/flint" "$HOME/bin/flint"
+        copied_flint=1
+        printf "${GREEN}✓ Installed %s/bin/flint${RESET}\n" "$HOME"
+      fi
     fi
 
     if (( need_flint == 1 )); then
-      printf "Building flint in %s...\n" "$flint_dir"
-      if make -C "$flint_dir" force; then
-        mkdir -p "$HOME/bin"
-        cp -f "$flint_dir/flint" "$HOME/bin/flint"
-        printf "${GREEN}✓ Built & installed %s/flint -> %s/bin/flint${RESET}\n" "$flint_dir" "$HOME"
+      if is_dry_run; then
+        printf "Would build flint in %s.\n" "$flint_dir"
       else
-        printf "${YELLOW}⚠ Failed to build flint${RESET}\n" >&2
-        return 1
+        printf "Building flint in %s...\n" "$flint_dir"
+        if make -C "$flint_dir" force; then
+          mkdir -p "$HOME/bin"
+          cp -f "$flint_dir/flint" "$HOME/bin/flint"
+          printf "${GREEN}✓ Built & installed %s/flint -> %s/bin/flint${RESET}\n" "$flint_dir" "$HOME"
+        else
+          printf "${YELLOW}⚠ Failed to build flint${RESET}\n" >&2
+          return 1
+        fi
       fi
     elif (( copied_flint == 0 )); then
       printf "flint is already up to date.\n"
@@ -909,18 +1149,26 @@ update_local_projects() {
     fi
 
     if (( need_scribe == 1 )); then
-      printf "Building scribe in %s...\n" "$scribe_dir"
-      if (cd "$scribe_dir" && npm install --loglevel=error --no-audit --no-fund && npm run --silent build); then
-        printf "${GREEN}✓ Built scribe (%s)${RESET}\n" "$scribe_dir"
+      if is_dry_run; then
+        printf "Would build scribe in %s.\n" "$scribe_dir"
       else
-        printf "${YELLOW}⚠ Failed to build scribe${RESET}\n" >&2
-        return 1
+        printf "Building scribe in %s...\n" "$scribe_dir"
+        if (cd "$scribe_dir" && npm install --loglevel=error --no-audit --no-fund && npm run --silent build); then
+          printf "${GREEN}✓ Built scribe (%s)${RESET}\n" "$scribe_dir"
+        else
+          printf "${YELLOW}⚠ Failed to build scribe${RESET}\n" >&2
+          return 1
+        fi
       fi
     else
       printf "scribe is already up to date.\n"
     fi
     if ! command -v scribe >/dev/null 2>&1; then
-      (cd "$scribe_dir" && npm link --loglevel=error) || true
+      if is_dry_run; then
+        printf "Would run: npm link (in %s)\n" "$scribe_dir"
+      else
+        (cd "$scribe_dir" && npm link --loglevel=error) || true
+      fi
     fi
   fi
 }
@@ -928,27 +1176,59 @@ update_local_projects() {
 update_shell() {
   if command -v fish >/dev/null 2>&1; then
     if fish -c 'type -q fisher' 2>/dev/null; then
-      printf "Updating Fisher plugins...\n"
-      fish -c 'fisher update'
+      if is_dry_run; then
+        printf "Would run: fisher update\n"
+      else
+        printf "Updating Fisher plugins...\n"
+        fish -c 'fisher update'
+      fi
     fi
     local comp_dir="${XDG_CACHE_HOME:-$HOME/.cache}/fish/generated_completions"
     if [[ ! -d "$comp_dir" ]] || [[ -n "$(find "$comp_dir" -maxdepth 0 -mtime +7 2>/dev/null)" ]]; then
-      printf "Updating Fish manpage completions...\n"
-      fish -c 'fish_update_completions'
+      if is_dry_run; then
+        printf "Would refresh Fish manpage completions.\n"
+      else
+        printf "Updating Fish manpage completions...\n"
+        fish -c 'fish_update_completions'
+      fi
     else
       printf "Fish manpage completions are recent (<7 days old); skipping.\n"
     fi
   fi
 
   if [[ -d "${ZSH:-$HOME/.oh-my-zsh}" ]] && command -v zsh >/dev/null 2>&1; then
-    printf "Updating Oh My Zsh...\n"
-    zsh -c 'ZSH="${ZSH:-$HOME/.oh-my-zsh}" "$ZSH/tools/upgrade.sh" -v minimal' 2>/dev/null || true
+    if is_dry_run; then
+      printf "Would update Oh My Zsh.\n"
+    else
+      printf "Updating Oh My Zsh...\n"
+      zsh -c 'ZSH="${ZSH:-$HOME/.oh-my-zsh}" "$ZSH/tools/upgrade.sh" -v minimal' 2>/dev/null || true
+    fi
   fi
+}
+
+update_mas() {
+  local out
+  out="$(mas outdated 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    printf "All Mac App Store apps are up to date.\n"
+    return 0
+  fi
+  printf "%s\n" "$out"
+  if is_dry_run; then
+    printf "Would upgrade the Mac App Store apps listed above.\n"
+    return 0
+  fi
+  mas upgrade
 }
 
 sync_machine_repo() {
   local machine_repo
   if ! machine_repo="$(get_machine_repo)"; then
+    return 0
+  fi
+
+  if is_dry_run; then
+    printf "Would collect local configs, refresh Brewfile, and push to %s.\n" "$machine_repo"
     return 0
   fi
 
@@ -1020,8 +1300,56 @@ macos_scan_cache_file() {
   printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/alleyuup/macos-update-scan"
 }
 
+# Parse `softwareupdate -l` output into "SKIP:<label>" / "INSTALL:<label>" lines.
+# Updates whose major version differs from CURRENT_MAJOR are marked SKIP.
+parse_macos_updates() {
+  local current_major="${1:-0}"
+  awk -v cur_maj="${current_major:-0}" '
+    function flush() {
+      if (label == "") return
+      if (is_major) {
+        print "SKIP:" label
+      } else {
+        print "INSTALL:" label
+      }
+      label = ""
+      is_major = 0
+    }
+    /^[[:space:]]*\*[[:space:]]+Label:[[:space:]]*/ {
+      flush()
+      sub(/^[[:space:]]*\*[[:space:]]+Label:[[:space:]]*/, "", $0)
+      sub(/[[:space:]]+$/, "", $0)
+      label = $0
+      if (cur_maj > 0 && match(label, /macOS[[:space:]]+([A-Za-z]+[[:space:]]+)?[0-9]+\.[0-9]+/)) {
+        s = substr(label, RSTART, RLENGTH)
+        if (match(s, /[0-9]+\./)) {
+          maj = substr(s, RSTART, RLENGTH - 1) + 0
+          if (maj != cur_maj) is_major = 1
+        }
+      }
+      next
+    }
+    label != "" {
+      if (cur_maj > 0 && $0 ~ /Title:[[:space:]]*macOS/ && match($0, /Version:[[:space:]]*[0-9]+\./)) {
+        s = substr($0, RSTART, RLENGTH)
+        if (match(s, /[0-9]+/)) {
+          maj = substr(s, RSTART, RLENGTH) + 0
+          if (maj != cur_maj) is_major = 1
+        }
+      }
+    }
+    END {
+      flush()
+    }
+  '
+}
+
 update_macos() {
   if (( ALLEYUUP_MACOS_MAJOR == 1 )); then
+    if is_dry_run; then
+      printf "Would run: softwareupdate -i -a --agree-to-license\n"
+      return 0
+    fi
     softwareupdate -i -a --agree-to-license
     return $?
   fi
@@ -1073,48 +1401,13 @@ update_macos() {
     elif [[ "$line" == INSTALL:* ]]; then
       labels+=("${line#INSTALL:}")
     fi
-  done < <(
-    awk -v cur_maj="${current_major:-0}" '
-      function flush() {
-        if (label == "") return
-        if (is_major) {
-          print "SKIP:" label
-        } else {
-          print "INSTALL:" label
-        }
-        label = ""
-        is_major = 0
-      }
-      /^[[:space:]]*\*[[:space:]]+Label:[[:space:]]*/ {
-        flush()
-        sub(/^[[:space:]]*\*[[:space:]]+Label:[[:space:]]*/, "", $0)
-        sub(/[[:space:]]+$/, "", $0)
-        label = $0
-        if (cur_maj > 0 && match(label, /macOS[[:space:]]+([A-Za-z]+[[:space:]]+)?[0-9]+\.[0-9]+/)) {
-          s = substr(label, RSTART, RLENGTH)
-          if (match(s, /[0-9]+\./)) {
-            maj = substr(s, RSTART, RLENGTH - 1) + 0
-            if (maj != cur_maj) is_major = 1
-          }
-        }
-        next
-      }
-      label != "" {
-        if (cur_maj > 0 && $0 ~ /Title:[[:space:]]*macOS/ && match($0, /Version:[[:space:]]*[0-9]+\./)) {
-          s = substr($0, RSTART, RLENGTH)
-          if (match(s, /[0-9]+/)) {
-            maj = substr(s, RSTART, RLENGTH) + 0
-            if (maj != cur_maj) is_major = 1
-          }
-        }
-      }
-      END {
-        flush()
-      }
-    ' <<<"$list_out"
-  )
+  done < <(printf '%s\n' "$list_out" | parse_macos_updates "$current_major")
 
   if (( ${#labels[@]} > 0 )); then
+    if is_dry_run; then
+      printf "Would install macOS updates: %s\n" "${labels[*]}"
+      return 0
+    fi
     printf "Installing macOS updates: %s\n" "${labels[*]}"
     softwareupdate -i --agree-to-license "${labels[@]}"
     # Force a fresh scan next run so we don't act on stale labels
@@ -1124,9 +1417,26 @@ update_macos() {
   fi
 }
 
+# Allow the test suite to source this file for its helper functions
+if [[ "${ALLEYUUP_SOURCE_ONLY:-0}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 # Handle --repo after all helper functions are defined
 if (( RUN_CONFIGURE_REPO == 1 )); then
   configure_machine_repo "$CONFIGURE_REPO_TARGET"
+  exit 0
+fi
+
+apply_step_filters || exit 1
+
+if (( PRINT_MAPPINGS == 1 )); then
+  print_mappings
+  exit 0
+fi
+
+if (( PRINT_STEPS == 1 )); then
+  print_steps
   exit 0
 fi
 
@@ -1134,10 +1444,20 @@ if ! acquire_lock; then
   exit 0
 fi
 
+start_logging
+
 # 0. Self-update alleyuup & dots from shared tools Gist (git repo or standalone curl)
 printf "${BOLD}alleyuup v%s${RESET}\n" "$(get_version_string)"
+if is_dry_run; then
+  printf "${YELLOW}(dry run — no changes will be made)${RESET}\n"
+fi
 if (( ALLEYUUP_SELF_UPDATE == 1 )); then
-  run_step "Self-Update (alleyuup)" self_update_tools
+  if is_dry_run; then
+    section "Self-Update (alleyuup)"
+    printf "Would check for alleyuup & dots updates.\n"
+  else
+    run_step "Self-Update (alleyuup)" self_update_tools
+  fi
 fi
 
 # Run user pre-hook if defined in ~/.config/alleyuup/config
@@ -1156,36 +1476,28 @@ fi
 
 # 2. Mac App Store (mas)
 if (( ALLEYUUP_MAS == 1 )) && command -v mas >/dev/null 2>&1; then
-  run_step "Mac App Store (mas)" bash -c '
-    out="$(mas outdated 2>/dev/null || true)"
-    if [[ -n "$out" ]]; then
-      printf "%s\n" "$out"
-      mas upgrade
-    else
-      printf "All Mac App Store apps are up to date.\n"
-    fi
-  '
+  run_step "Mac App Store (mas)" update_mas
 fi
 
 # 3. Standalone CLI Tools
 if (( ALLEYUUP_AGY == 1 )) && has_working_cmd agy; then
-  run_step "Antigravity CLI (agy)" agy update
+  run_or_plan "Antigravity CLI (agy)" agy update
 fi
 
 if (( ALLEYUUP_CLAUDE == 1 )) && has_working_cmd claude; then
   # Only run standalone 'claude update' if claude is not already managed as a Homebrew cask
   if ! command -v brew >/dev/null 2>&1 || ! brew list --cask claude-code >/dev/null 2>&1; then
-    run_step "Claude Code CLI (claude)" claude update
+    run_or_plan "Claude Code CLI (claude)" claude update
   fi
 fi
 
 if (( ALLEYUUP_OPENCODE_STANDALONE == 1 )) && [[ -x "$HOME/.opencode/bin/opencode" ]]; then
-  run_step "OpenCode (standalone)" "$HOME/.opencode/bin/opencode" upgrade
+  run_or_plan "OpenCode (standalone)" "$HOME/.opencode/bin/opencode" upgrade
 fi
 
 if (( ALLEYUUP_OPENCLAW == 1 )) && has_working_cmd openclaw; then
   if ! openclaw update status 2>/dev/null | grep -q "Managed by OpenClaw.app"; then
-    run_step "OpenClaw CLI" openclaw update --yes
+    run_or_plan "OpenClaw CLI" openclaw update --yes
   fi
 fi
 
@@ -1205,25 +1517,25 @@ fi
 if (( ALLEYUUP_PNPM == 1 )) && has_working_cmd pnpm; then
   pnpm_out="$(pnpm list -g --depth=0 2>/dev/null || true)"
   if [[ -n "$pnpm_out" ]] && [[ "$pnpm_out" != *"No global packages found"* ]]; then
-    run_step "Global pnpm Packages" pnpm update -g --latest
+    run_or_plan "Global pnpm Packages" pnpm update -g --latest
   fi
 fi
 
 if (( ALLEYUUP_RUSTUP == 1 )) && command -v rustup >/dev/null 2>&1; then
-  run_step "Rust Toolchains (rustup)" rustup update
+  run_or_plan "Rust Toolchains (rustup)" rustup update
 fi
 
 if (( ALLEYUUP_UV == 1 )) && command -v uv >/dev/null 2>&1; then
-  run_step "uv Tools" uv tool upgrade --all
+  run_or_plan "uv Tools" uv tool upgrade --all
 fi
 
 if (( ALLEYUUP_PIPX == 1 )) && command -v pipx >/dev/null 2>&1; then
-  run_step "pipx Packages" pipx upgrade-all
+  run_or_plan "pipx Packages" pipx upgrade-all
 fi
 
 if (( ALLEYUUP_GH_EXT == 1 )) && command -v gh >/dev/null 2>&1; then
   if [[ -n "$(gh extension list 2>/dev/null || true)" ]]; then
-    run_step "GitHub CLI Extensions" gh extension upgrade --all
+    run_or_plan "GitHub CLI Extensions" gh extension upgrade --all
   fi
 fi
 

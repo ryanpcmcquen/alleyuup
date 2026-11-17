@@ -1,0 +1,25 @@
+#compdef alleyuup
+
+local -a steps
+steps=(
+  self-update brew mas agy claude opencode openclaw nvm npm pnpm
+  rustup uv pipx gh-ext repos local-projects brewfile repo-sync shell macos
+)
+
+_arguments -s \
+  '(-h --help)'{-h,--help}'[Show help]' \
+  '(-v --version)'{-v,--version}'[Print version and git revision]' \
+  '(-n --dry-run)'{-n,--dry-run}'[Preview changes without applying them]' \
+  '--fast[Skip macOS system updates]' \
+  '--no-macos[Skip macOS system updates]' \
+  '--no-repos[Skip git pulls in ~/code]' \
+  '--no-self-update[Skip pulling latest alleyuup]' \
+  '--only=[Run only these steps]:steps:($steps)' \
+  '--skip=[Skip these steps]:steps:($steps)' \
+  '--repo=[Configure the machine config repo]:target:_files -/' \
+  '--config[Edit the per-machine config]' \
+  '--edit[Edit the per-machine config]' \
+  '--print-config[Print the per-machine config]' \
+  '--print-steps[Print resolved step toggles]' \
+  '--print-mappings[Print tracked file mappings]' \
+  '--check[Check for updates on the remote]'

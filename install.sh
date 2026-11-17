@@ -28,12 +28,31 @@ else
   fi
 fi
 
-chmod +x "$TOOLS_DIR/alleyuup" "$TOOLS_DIR/dots"
+chmod +x "$TOOLS_DIR/alleyuup" "$TOOLS_DIR/dots" "$TOOLS_DIR/test-alleyuup.sh" 2>/dev/null || true
 ln -sfn "$TOOLS_DIR/alleyuup" "$BIN_DIR/alleyuup"
 ln -sfn "$TOOLS_DIR/dots" "$BIN_DIR/dots"
 
 printf "${GREEN}✓ Linked:${RESET} %s/alleyuup -> %s/alleyuup\n" "$BIN_DIR" "$TOOLS_DIR"
 printf "${GREEN}✓ Linked:${RESET} %s/dots    -> %s/dots\n" "$BIN_DIR" "$TOOLS_DIR"
+
+# Shell completions
+FISH_COMPLETIONS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
+ZSH_FUNCTIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions"
+
+if [[ -f "$TOOLS_DIR/alleyuup.fish" ]]; then
+  mkdir -p "$FISH_COMPLETIONS_DIR"
+  ln -sfn "$TOOLS_DIR/alleyuup.fish" "$FISH_COMPLETIONS_DIR/alleyuup.fish"
+  ln -sfn "$TOOLS_DIR/dots.fish" "$FISH_COMPLETIONS_DIR/dots.fish"
+  printf "${GREEN}✓ Linked:${RESET} fish completions -> %s\n" "$FISH_COMPLETIONS_DIR"
+fi
+
+if [[ -f "$TOOLS_DIR/_alleyuup" ]]; then
+  mkdir -p "$ZSH_FUNCTIONS_DIR"
+  ln -sfn "$TOOLS_DIR/_alleyuup" "$ZSH_FUNCTIONS_DIR/_alleyuup"
+  ln -sfn "$TOOLS_DIR/_dots" "$ZSH_FUNCTIONS_DIR/_dots"
+  printf "${GREEN}✓ Linked:${RESET} zsh completions -> %s\n" "$ZSH_FUNCTIONS_DIR"
+  printf "  ${YELLOW}zsh:${RESET} add 'fpath=(%s \$fpath)' to ~/.zshrc before compinit\n" "$ZSH_FUNCTIONS_DIR"
+fi
 
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   printf "\n${YELLOW}Note:${RESET} %s is not in your current PATH yet.\n" "$BIN_DIR"

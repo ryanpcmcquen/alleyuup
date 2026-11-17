@@ -67,15 +67,24 @@ Because `~/.config/alleyuup/config` is symlinked to `alleyuup.conf` in that mach
 ```sh
 alleyuup                 # Self-update tools Gist, then run all enabled upgrades
 alleyuup --fast          # Skip macOS softwareupdate (alias: --no-macos)
+alleyuup --dry-run       # Show what would change, without changing anything
+alleyuup --only brew,mas # Run only the listed steps
+alleyuup --skip npm,uv   # Skip the listed steps
 alleyuup --no-self-update# Skip pulling latest alleyuup & dots from this Gist
 alleyuup --config        # Open ~/.config/alleyuup/config in $EDITOR
 alleyuup --print-config  # Print active ~/.config/alleyuup/config
+alleyuup --print-steps   # Print resolved step toggles (debugging)
 ```
 
+Step keys for `--only`/`--skip`:
+`self-update brew mas agy claude opencode openclaw nvm npm pnpm rustup uv pipx gh-ext repos local-projects brewfile repo-sync shell macos`
+
 Notes:
+- Precedence is `defaults < ~/.config/alleyuup/config < environment < CLI flags`, so `ALLEYUUP_BREW=0 alleyuup` works for a one-off run.
 - Repository pulls run in parallel, and only repos whose local `HEAD` moved are reported as `updated`.
 - The macOS update scan is cached for `ALLEYUUP_MACOS_CHECK_HOURS` (default `24`) so `softwareupdate -l` is not paid on every run. Set it to `0` to always rescan.
 - A lock prevents overlapping runs, so two logins can't collide on Homebrew, npm, or the Gist.
+- Set `ALLEYUUP_LOG=1` (or a path) to tee output to `~/Library/Logs/alleyuup.log`.
 
 ### `dots`
 ```sh
@@ -86,5 +95,11 @@ dots pull               # Pull latest changes for both tools and machine Gists &
 dots link               # Symlink alleyuup, dots, and all machine config files
 dots add <file> [name]  # Track a new config file in the machine Gist
 dots clean [keep]       # Prune stale '.bak.<timestamp>' backups (keeps newest 3)
+dots lint               # bash -n + shellcheck (if installed) + test suite
+dots schedule install   # Weekly launchd run (Sunday 03:00), logs to ~/Library/Logs
+dots schedule status    # Show schedule state
+dots schedule remove    # Remove the schedule
 dots repo [target]      # View or change the machine's config Gist
 ```
+
+Shell completions for Fish and Zsh are installed by `install.sh` (and re-linked by `dots link`); the Zsh files land in `~/.local/share/zsh/site-functions`, so add that directory to `fpath` in `~/.zshrc` before `compinit`.
