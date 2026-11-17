@@ -872,7 +872,7 @@ update_code_repos() {
 update_local_projects() {
   local flint_dir="$ALLEYUUP_CODE_DIR/flint"
   if [[ -f "$flint_dir/Makefile" ]] && command -v make >/dev/null 2>&1; then
-    local need_flint=0
+    local need_flint=0 copied_flint=0
     if [[ ! -x "$flint_dir/flint" ]] || [[ ! -x "$HOME/bin/flint" ]]; then
       need_flint=1
     elif [[ -n "$(find "$flint_dir/source" "$flint_dir/Makefile" -newer "$flint_dir/flint" 2>/dev/null | head -n 1)" ]]; then
@@ -880,7 +880,8 @@ update_local_projects() {
     elif ! cmp -s "$flint_dir/flint" "$HOME/bin/flint"; then
       mkdir -p "$HOME/bin"
       cp -f "$flint_dir/flint" "$HOME/bin/flint"
-      printf "${GREEN}✓ Updated %s/bin/flint${RESET}\n" "$HOME"
+      copied_flint=1
+      printf "${GREEN}✓ Installed %s/bin/flint${RESET}\n" "$HOME"
     fi
 
     if (( need_flint == 1 )); then
@@ -893,7 +894,7 @@ update_local_projects() {
         printf "${YELLOW}⚠ Failed to build flint${RESET}\n" >&2
         return 1
       fi
-    else
+    elif (( copied_flint == 0 )); then
       printf "flint is already up to date.\n"
     fi
   fi
