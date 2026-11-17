@@ -7,7 +7,7 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 # Disable interactive confirmation prompts in Homebrew
 export HOMEBREW_NO_ASK=1
 
-ALLEYUUP_VERSION="1.3.0"
+ALLEYUUP_VERSION="1.3.1"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -556,6 +556,33 @@ run_or_plan() {
   run_step "$name" "$@"
 }
 
+# Run a command into a temp log, to be shown only if it fails.
+# Sets RUN_LOG to the log path; caller must clear it (print_run_log or rm).
+run_logged() {
+  RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/alleyuup-cmd.XXXXXX")" || {
+    RUN_LOG=""
+    return 1
+  }
+  if "$@" > "$RUN_LOG" 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# Print and remove the log captured by run_logged
+print_run_log() {
+  if [[ -n "${RUN_LOG:-}" ]] && [[ -s "$RUN_LOG" ]]; then
+    sed 's/^/      /' "$RUN_LOG"
+  fi
+  [[ -n "${RUN_LOG:-}" ]] && rm -f "$RUN_LOG"
+  RUN_LOG=""
+}
+
+clear_run_log() {
+  [[ -n "${RUN_LOG:-}" ]] && rm -f "$RUN_LOG"
+  RUN_LOG=""
+}
+
 in_array() {
   local needle="$1"
   shift
@@ -1102,46 +1129,49 @@ update_code_repos() {
 }
 
 update_local_projects() {
+  local failed=0
+
   local flint_dir="$ALLEYUUP_CODE_DIR/flint"
   if [[ -f "$flint_dir/Makefile" ]] && command -v make >/dev/null 2>&1; then
-    local need_flint=0 copied_flint=0
+    local need_flint=0 copied_flint=0 flint_msg=""
     if [[ ! -x "$flint_dir/flint" ]] || [[ ! -x "$HOME/bin/flint" ]]; then
       need_flint=1
     elif [[ -n "$(find "$flint_dir/source" "$flint_dir/Makefile" -newer "$flint_dir/flint" 2>/dev/null | head -n 1)" ]]; then
       need_flint=1
     elif ! cmp -s "$flint_dir/flint" "$HOME/bin/flint"; then
       if is_dry_run; then
-        printf "Would install updated flint binary to %s/bin/flint.\n" "$HOME"
+        flint_msg="would install existing build to ~/bin/flint"
       else
         mkdir -p "$HOME/bin"
         cp -f "$flint_dir/flint" "$HOME/bin/flint"
         copied_flint=1
-        printf "${GREEN}✓ Installed %s/bin/flint${RESET}\n" "$HOME"
+        flint_msg="installed existing build to ~/bin/flint"
       fi
     fi
 
     if (( need_flint == 1 )); then
       if is_dry_run; then
-        printf "Would build flint in %s.\n" "$flint_dir"
+        flint_msg="would rebuild and install to ~/bin/flint"
+      elif run_logged make -C "$flint_dir" force; then
+        clear_run_log
+        mkdir -p "$HOME/bin"
+        cp -f "$flint_dir/flint" "$HOME/bin/flint"
+        flint_msg="rebuilt and installed to ~/bin/flint"
       else
-        printf "Building flint in %s...\n" "$flint_dir"
-        if make -C "$flint_dir" force; then
-          mkdir -p "$HOME/bin"
-          cp -f "$flint_dir/flint" "$HOME/bin/flint"
-          printf "${GREEN}✓ Built & installed %s/flint -> %s/bin/flint${RESET}\n" "$flint_dir" "$HOME"
-        else
-          printf "${YELLOW}⚠ Failed to build flint${RESET}\n" >&2
-          return 1
-        fi
+        flint_msg="build failed"
+        failed=1
       fi
-    elif (( copied_flint == 0 )); then
-      printf "flint is already up to date.\n"
+    elif (( copied_flint == 0 )) && [[ -z "$flint_msg" ]]; then
+      flint_msg="up to date"
     fi
+
+    printf "  %-8s %s\n" "flint:" "$flint_msg"
+    [[ -n "${RUN_LOG:-}" ]] && print_run_log
   fi
 
   local scribe_dir="$ALLEYUUP_CODE_DIR/scribe"
   if [[ -f "$scribe_dir/package.json" ]] && has_working_cmd npm; then
-    local need_scribe=0
+    local need_scribe=0 scribe_msg=""
     if [[ ! -d "$scribe_dir/node_modules" ]] || [[ ! -f "$scribe_dir/dist/cli.js" ]]; then
       need_scribe=1
     elif [[ -n "$(find "$scribe_dir/src" "$scribe_dir/package.json" "$scribe_dir/tsconfig.json" -newer "$scribe_dir/dist/cli.js" 2>/dev/null | head -n 1)" ]]; then
@@ -1150,27 +1180,35 @@ update_local_projects() {
 
     if (( need_scribe == 1 )); then
       if is_dry_run; then
-        printf "Would build scribe in %s.\n" "$scribe_dir"
+        scribe_msg="would rebuild"
+      elif run_logged bash -c 'cd "$1" && npm install --loglevel=error --no-audit --no-fund && npm run --silent build' _ "$scribe_dir"; then
+        clear_run_log
+        scribe_msg="rebuilt"
       else
-        printf "Building scribe in %s...\n" "$scribe_dir"
-        if (cd "$scribe_dir" && npm install --loglevel=error --no-audit --no-fund && npm run --silent build); then
-          printf "${GREEN}✓ Built scribe (%s)${RESET}\n" "$scribe_dir"
-        else
-          printf "${YELLOW}⚠ Failed to build scribe${RESET}\n" >&2
-          return 1
-        fi
+        scribe_msg="build failed"
+        failed=1
       fi
     else
-      printf "scribe is already up to date.\n"
+      scribe_msg="up to date"
     fi
+
     if ! command -v scribe >/dev/null 2>&1; then
       if is_dry_run; then
-        printf "Would run: npm link (in %s)\n" "$scribe_dir"
+        scribe_msg="$scribe_msg; would run npm link"
+      elif run_logged bash -c 'cd "$1" && npm link --loglevel=error' _ "$scribe_dir"; then
+        clear_run_log
+        scribe_msg="$scribe_msg; linked into PATH"
       else
-        (cd "$scribe_dir" && npm link --loglevel=error) || true
+        scribe_msg="$scribe_msg; npm link failed"
+        failed=1
       fi
     fi
+
+    printf "  %-8s %s\n" "scribe:" "$scribe_msg"
+    [[ -n "${RUN_LOG:-}" ]] && print_run_log
   fi
+
+  return $failed
 }
 
 update_shell() {
@@ -1546,7 +1584,7 @@ fi
 
 # 5b. Build & install local CLI projects (flint, scribe)
 if (( ALLEYUUP_LOCAL_PROJECTS == 1 )) && [[ -d "$ALLEYUUP_CODE_DIR/flint" || -d "$ALLEYUUP_CODE_DIR/scribe" ]]; then
-  run_step "Local CLI Projects (flint & scribe)" update_local_projects
+  run_step "Local CLI Projects" update_local_projects
 fi
 
 # 6. Collect local configs, refresh Brewfile, and push to machine config repo
