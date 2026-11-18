@@ -18,6 +18,7 @@ _arguments -s \
   '--skip=[Skip these steps]:steps:($steps)' \
   '--repo=[Configure the machine config repo]:target:_files -/' \
   '--config[Edit the per-machine config]' \
+  '--init-config[Create the per-machine config without an editor]' \
   '--edit[Edit the per-machine config]' \
   '--print-config[Print the per-machine config]' \
   '--print-steps[Print resolved step toggles]' \

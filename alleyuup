@@ -7,7 +7,7 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 # Disable interactive confirmation prompts in Homebrew
 export HOMEBREW_NO_ASK=1
 
-ALLEYUUP_VERSION="1.4.0"
+ALLEYUUP_VERSION="1.4.1"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -438,6 +438,7 @@ Options:
   --skip <steps>       Skip the listed steps (comma-separated)
   --repo [target]      Configure this machine's config/Brewfile repo (path, Gist ID/URL, or 'new')
   --config, --edit     Open $CONFIG_FILE in \$EDITOR (creates default if missing)
+  --init-config        Create $CONFIG_FILE with defaults (no editor)
   --print-config       Print the path and contents of $CONFIG_FILE
   --print-steps        Print resolved step toggles and exit
   --print-mappings     Print tracked config file mappings and exit
@@ -529,6 +530,15 @@ while (( $# > 0 )); do
         printf "${GREEN}✓ Created default config at %s${RESET}\n" "$CONFIG_FILE"
       fi
       ${EDITOR:-vi} "$CONFIG_FILE"
+      exit 0
+      ;;
+    --init-config)
+      if [[ -f "$CONFIG_FILE" ]]; then
+        printf "Config already exists: %s\n" "$CONFIG_FILE"
+      else
+        write_default_config "$CONFIG_FILE"
+        printf "${GREEN}✓ Created default config at %s${RESET}\n" "$CONFIG_FILE"
+      fi
       exit 0
       ;;
     --print-config)

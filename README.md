@@ -72,6 +72,7 @@ alleyuup --only brew,mas # Run only the listed steps
 alleyuup --skip npm,uv   # Skip the listed steps
 alleyuup --no-self-update# Skip pulling latest alleyuup & dots from this Gist
 alleyuup --config        # Open ~/.config/alleyuup/config in $EDITOR
+alleyuup --init-config   # Create the config with defaults, no editor
 alleyuup --print-config  # Print active ~/.config/alleyuup/config
 alleyuup --print-steps   # Print resolved step toggles (debugging)
 ```
@@ -100,7 +101,7 @@ dots clean [keep]       # Prune stale '.bak.<timestamp>' backups (keeps newest 3
 dots doctor             # Health check: links, completions, repo, PATH, schedule
 dots restore            # Install Brewfile packages and link everything (brew bootstrap)
 dots restore --schedule # Same, plus install the weekly job
-dots lint               # bash -n + shellcheck (if installed) + test suite
+dots lint               # bash -n + shellcheck (if installed) + both test suites
 dots schedule install   # Weekly launchd run (Sunday 03:00), logs to ~/Library/Logs
 dots schedule status    # Show schedule state
 dots schedule remove    # Remove the schedule

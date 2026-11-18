@@ -28,7 +28,8 @@ else
   fi
 fi
 
-chmod +x "$TOOLS_DIR/alleyuup" "$TOOLS_DIR/dots" "$TOOLS_DIR/test-alleyuup.sh" 2>/dev/null || true
+chmod +x "$TOOLS_DIR/alleyuup" "$TOOLS_DIR/dots" 2>/dev/null || true
+chmod +x "$TOOLS_DIR"/test-*.sh 2>/dev/null || true
 ln -sfn "$TOOLS_DIR/alleyuup" "$BIN_DIR/alleyuup"
 ln -sfn "$TOOLS_DIR/dots" "$BIN_DIR/dots"
 

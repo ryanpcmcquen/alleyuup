@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.4.0"
+DOTS_VERSION="1.4.1"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -332,7 +332,7 @@ cmd_link() {
 
   # Ensure alleyuup.conf exists in the machine repo so it can be linked and customized
   if [[ ! -f "$REPO_DIR/alleyuup.conf" ]] && [[ -x "$HOME/bin/alleyuup" ]]; then
-    ALLEYUUP_CONFIG="$REPO_DIR/alleyuup.conf" "$HOME/bin/alleyuup" --config >/dev/null 2>&1 || true
+    ALLEYUUP_CONFIG="$REPO_DIR/alleyuup.conf" "$HOME/bin/alleyuup" --init-config >/dev/null 2>&1 || true
   fi
 
   printf "\n${BLUE}==> Linking machine configs from %s${RESET}\n" "$REPO_DIR"
@@ -532,11 +532,15 @@ cmd_lint() {
     printf "\n${YELLOW}shellcheck not installed; skipping (brew install shellcheck).${RESET}\n"
   fi
 
-  if [[ -x "$tools_dir/test-alleyuup.sh" ]]; then
-    printf "\n${BLUE}==> test-alleyuup.sh${RESET}\n"
-    if ! "$tools_dir/test-alleyuup.sh"; then
-      failed=1
-    fi
+  if [[ -d "$tools_dir" ]]; then
+    local test_script
+    for test_script in "$tools_dir"/test-*.sh; do
+      [[ -f "$test_script" ]] || continue
+      printf "\n${BLUE}==> %s${RESET}\n" "$(basename "$test_script")"
+      if ! "$test_script"; then
+        failed=1
+      fi
+    done
   fi
 
   if (( failed == 0 )); then
@@ -688,30 +692,37 @@ cmd_doctor() {
   fi
 
   printf "\n${BLUE}==> Machine repo${RESET}\n"
-  if [[ -f "$REPO_CONFIG_FILE" ]]; then
+  if [[ -n "${DOTFILES_GIST_DIR:-}" ]] && [[ -d "${DOTFILES_GIST_DIR}" ]]; then
+    repo_dir="$(cd -P "$DOTFILES_GIST_DIR" && pwd)"
+    health_ok "configured via DOTFILES_GIST_DIR: $repo_dir"
+  elif [[ -f "$REPO_CONFIG_FILE" ]]; then
     repo_dir="$(head -n 1 "$REPO_CONFIG_FILE" | tr -d '\r\n')"
     if [[ -n "$repo_dir" ]] && [[ -d "$repo_dir" ]]; then
       health_ok "configured: $repo_dir"
-      if [[ -d "$repo_dir/.git" ]]; then
-        health_ok "is a git repo"
-        if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null)" ]]; then
-          health_ok "working tree clean"
-        else
-          health_warn "working tree has changes (run 'dots sync')"
-        fi
-        if git -C "$repo_dir" remote get-url origin >/dev/null 2>&1; then
-          health_ok "origin remote configured"
-        else
-          health_warn "no origin remote; changes will stay local"
-        fi
-      else
-        health_bad "$repo_dir is not a git repo"
-      fi
     else
       health_bad "configured repo missing: ${repo_dir:-<empty>}"
+      repo_dir=""
     fi
   else
     health_warn "no machine repo configured (run 'dots repo')"
+  fi
+
+  if [[ -n "$repo_dir" ]]; then
+    if [[ -d "$repo_dir/.git" ]]; then
+      health_ok "is a git repo"
+      if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null)" ]]; then
+        health_ok "working tree clean"
+      else
+        health_warn "working tree has changes (run 'dots sync')"
+      fi
+      if git -C "$repo_dir" remote get-url origin >/dev/null 2>&1; then
+        health_ok "origin remote configured"
+      else
+        health_warn "no origin remote; changes will stay local"
+      fi
+    else
+      health_bad "$repo_dir is not a git repo"
+    fi
   fi
 
   printf "\n${BLUE}==> Tracked configs${RESET}\n"
