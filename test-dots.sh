@@ -59,7 +59,7 @@ chmod +x "$tools/alleyuup" "$tools/dots"
 repo="$sandbox/repo"
 mkdir -p "$repo"
 repo="$(cd -P "$repo" && pwd)"
-printf 'fake gitconfig\n' > "$repo/gitconfig"
+printf '[user]\n\tname = Test\n\temail = test@example.com\n' > "$repo/gitconfig"
 printf 'fake zprofile\n' > "$repo/zprofile"
 (
   cd "$repo" || exit 1
@@ -117,6 +117,34 @@ doctor_out="$("$DOTS" doctor 2>&1)"
 check_contains "doctor reads mappings from alleyuup" "read 38 mappings" "$doctor_out"
 check_contains "doctor reports no sensitive paths" "no sensitive paths tracked" "$doctor_out"
 check_contains "doctor checks the linked configs" "tracked file(s) linked" "$doctor_out"
+
+printf '\nschedule plist\n'
+plist_out="$("$DOTS" schedule print 4 2>&1)"
+check_contains "plist uses ALLEYUUP_LOG" "<key>ALLEYUUP_LOG</key>" "$plist_out"
+check_contains "plist enables notifications" "<key>ALLEYUUP_NOTIFY</key>" "$plist_out"
+check_contains "plist uses the requested hour" "<integer>4</integer>" "$plist_out"
+check "plist avoids duplicate launchd logging" "0" "$(printf '%s\n' "$plist_out" | grep -c 'StandardOutPath' || true)"
+
+printf '\nsync (push)\n'
+git init -q --bare "$sandbox/origin.git"
+git -C "$repo" remote add origin "$sandbox/origin.git"
+printf 'more\n' >> "$repo/gitconfig"
+sync_out="$("$DOTS" sync "test sync" 2>&1)"
+sync_status=$?
+check_exit "sync exits 0 on success" "0" "$sync_status"
+pushed=0
+if git -C "$sandbox/origin.git" rev-parse --verify -q main >/dev/null 2>&1; then
+  pushed=1
+fi
+check "sync pushed a commit to origin" "1" "$pushed"
+
+printf '\nsync (push failure)\n'
+git -C "$repo" remote set-url origin "$sandbox/missing.git"
+printf 'again\n' >> "$repo/gitconfig"
+fail_out="$("$DOTS" sync "test fail" 2>&1)"
+fail_status=$?
+check_exit "failed push exits non-zero" "1" "$fail_status"
+check_contains "failed push is reported" "Failed to push machine configs" "$fail_out"
 
 printf '\nversion\n'
 check_contains "version prints name" "dots v" "$("$DOTS" --version 2>&1)"

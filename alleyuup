@@ -7,7 +7,7 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 # Disable interactive confirmation prompts in Homebrew
 export HOMEBREW_NO_ASK=1
 
-ALLEYUUP_VERSION="1.4.1"
+ALLEYUUP_VERSION="1.4.2"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -35,7 +35,7 @@ ALLEYUUP_OVERRIDABLE_VARS=(
   ALLEYUUP_SCRIBE ALLEYUUP_JOBS ALLEYUUP_BREWFILE ALLEYUUP_REPO_SYNC
   ALLEYUUP_SHELL ALLEYUUP_MACOS
   ALLEYUUP_MACOS_MAJOR ALLEYUUP_MACOS_CHECK_HOURS ALLEYUUP_REPO_DIR
-  ALLEYUUP_DRY_RUN ALLEYUUP_LOG
+  ALLEYUUP_DRY_RUN ALLEYUUP_NOTIFY ALLEYUUP_LOG
 )
 ALLEYUUP_ENV_NAMES=()
 ALLEYUUP_ENV_VALUES=()
@@ -81,6 +81,7 @@ unset _alleyuup_env_var
 : "${ALLEYUUP_MACOS_MAJOR:=0}"
 : "${ALLEYUUP_MACOS_CHECK_HOURS:=24}"
 : "${ALLEYUUP_DRY_RUN:=0}"
+: "${ALLEYUUP_NOTIFY:=0}"
 : "${ALLEYUUP_LOG:=}"
 
 # Tracked machine config files (<repo_filename>:<target_path_in_home>)
@@ -384,6 +385,7 @@ ALLEYUUP_SHELL=1                # Update Fisher plugins and Fish completions
 ALLEYUUP_MACOS=1                # Run macOS software updates (minor/patch & security updates)
 ALLEYUUP_MACOS_MAJOR=0          # Allow major macOS version upgrades (0 = block major OS upgrades)
 ALLEYUUP_MACOS_CHECK_HOURS=24   # Reuse the macOS update scan for this many hours (0 = always rescan)
+ALLEYUUP_NOTIFY=0               # macOS notification when an unattended run fails
 
 # Default branches when checking git repos in ALLEYUUP_CODE_DIR:
 ALLEYUUP_DEFAULT_BRANCHES=("main" "master" "dev" "staging")
@@ -819,6 +821,16 @@ start_logging() {
 
 is_dry_run() {
   (( ALLEYUUP_DRY_RUN == 1 ))
+}
+
+# Post a macOS notification (used by unattended scheduled runs)
+notify() {
+  (( ALLEYUUP_NOTIFY == 1 )) || return 0
+  command -v osascript >/dev/null 2>&1 || return 0
+  local title="$1"
+  local message="$2"
+  message="${message//\"/}"
+  osascript -e "display notification \"$message\" with title \"$title\"" >/dev/null 2>&1 || true
 }
 
 # Verify a command exists AND is not a broken '#!/usr/bin/env node' wrapper on a machine without node
@@ -1425,9 +1437,15 @@ sync_machine_repo() {
       branch="$(git -C "$machine_repo" symbolic-ref --short HEAD 2>/dev/null | head -n 1 | tr -d '[:space:]')"
       [[ -z "$branch" ]] && branch="main"
       if [[ -n "$(git -C "$machine_repo" status --porcelain -b 2>/dev/null | grep '^## .*\[ahead ')" ]] || ! git -C "$machine_repo" diff --quiet "origin/$branch" HEAD 2>/dev/null; then
-        git -C "$machine_repo" pull --rebase --quiet origin "$branch" || true
-        git -C "$machine_repo" push origin "$branch"
-        printf "Pushed machine configs to %s (%s)\n" "$machine_repo" "$branch"
+        if git -C "$machine_repo" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+          git -C "$machine_repo" pull --rebase --quiet origin "$branch" || true
+        fi
+        if git -C "$machine_repo" push origin "$branch"; then
+          printf "Pushed machine configs to %s (%s)\n" "$machine_repo" "$branch"
+        else
+          printf "${YELLOW}⚠ Failed to push machine configs to %s (%s)${RESET}\n" "$machine_repo" "$branch" >&2
+          return 1
+        fi
       fi
     fi
   fi
@@ -1715,6 +1733,7 @@ fi
 printf "\n"
 if (( ${#FAILED_STEPS[@]} > 0 )); then
   printf "${YELLOW}Finished with warnings in: %s${RESET}\n" "${FAILED_STEPS[*]}"
+  notify "alleyuup" "Finished with warnings in: ${FAILED_STEPS[*]}"
   exit 1
 else
   printf "${BOLD}${GREEN}✨ All upgrades completed!${RESET}\n"

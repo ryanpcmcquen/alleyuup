@@ -87,6 +87,7 @@ Notes:
 - The macOS update scan is cached for `ALLEYUUP_MACOS_CHECK_HOURS` (default `24`) so `softwareupdate -l` is not paid on every run. Set it to `0` to always rescan.
 - A lock prevents overlapping runs, so two logins can't collide on Homebrew, npm, or the Gist.
 - Set `ALLEYUUP_LOG=1` (or a path) to tee output to `~/Library/Logs/alleyuup.log`; the log is rotated to the last 500 lines once it exceeds 5 MB.
+- `ALLEYUUP_NOTIFY=1` posts a macOS notification when a run ends with failed steps (used by the weekly job).
 - Tracked paths are checked against a sensitive deny-list (`~/.ssh`, `~/.gnupg`, `gh/hosts.yml`, `opencode/service.json`, …), so credentials cannot be committed by accident.
 
 ### `dots`
@@ -104,6 +105,7 @@ dots restore --schedule # Same, plus install the weekly job
 dots lint               # bash -n + shellcheck (if installed) + both test suites
 dots schedule install   # Weekly launchd run (Sunday 03:00), logs to ~/Library/Logs
 dots schedule status    # Show schedule state
+dots schedule print     # Print the generated launchd plist (no changes)
 dots schedule remove    # Remove the schedule
 dots repo [target]      # View or change the machine's config Gist
 ```

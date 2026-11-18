@@ -130,6 +130,23 @@ check_contains "env disables brew over config" "ALLEYUUP_BREW=0" "$steps"
 check_contains "env disables mas over config" "ALLEYUUP_MAS=0" "$steps"
 rm -f "$tmp_conf"
 
+printf '\nrotate_log\n'
+rot_dir="$(mktemp -d "${TMPDIR:-/tmp}/alleyuup-rot.XXXXXX")"
+yes "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789" | head -n 60000 > "$rot_dir/big.log"
+rot_lines="$(run_helper "$rot_dir" 'rotate_log "$FIXTURE/big.log"; wc -l < "$FIXTURE/big.log" | tr -d " "')"
+check "rotate_log keeps the last 500 lines" "500" "$rot_lines"
+rm -rf "$rot_dir"
+
+printf '\nCLI: init-config\n'
+init_conf="$(mktemp "${TMPDIR:-/tmp}/alleyuup-init.XXXXXX")"
+rm -f "$init_conf"
+ALLEYUUP_CONFIG="$init_conf" "$ALLEYUUP" --init-config >/dev/null 2>&1
+check "init-config creates the file" "yes" "$([[ -f "$init_conf" ]] && echo yes || echo no)"
+check_contains "init-config writes defaults" "ALLEYUUP_BREW=1" "$(cat "$init_conf" 2>/dev/null)"
+init_again="$(ALLEYUUP_CONFIG="$init_conf" "$ALLEYUUP" --init-config 2>&1)"
+check_contains "init-config does not overwrite" "already exists" "$init_again"
+rm -f "$init_conf"
+
 printf '\nCLI: help and version\n'
 help_out="$(ALLEYUUP_CONFIG="$PLAIN_CONFIG" "$ALLEYUUP" --help 2>/dev/null)"
 check_contains "--help lists --dry-run" "--dry-run" "$help_out"

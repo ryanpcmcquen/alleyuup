@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.4.1"
+DOTS_VERSION="1.4.2"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -263,7 +263,7 @@ Commands:
   doctor            Health check: links, completions, repo, PATH, schedule
   restore [--schedule]  Install Brewfile packages, link configs, optionally schedule
   lint              Syntax-check the scripts and run the test suite
-  schedule [...]    Weekly launchd run: 'install [hour]', 'status', or 'remove'
+  schedule [...]    Weekly launchd run: 'install [hour]', 'status', 'print', or 'remove'
   repo [target]     View or change the config repo for this machine (path, Gist ID/URL, or 'new')
   path              Print the path to this machine's config repo
   -h, --help        Show this help message
@@ -424,8 +424,13 @@ cmd_sync() {
       local branch
       branch="$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null | head -n 1 | tr -d '[:space:]')"
       [[ -z "$branch" ]] && branch="main"
-      git -C "$REPO_DIR" pull --rebase origin "$branch"
-      git -C "$REPO_DIR" push origin "$branch"
+      if git -C "$REPO_DIR" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+        git -C "$REPO_DIR" pull --rebase origin "$branch"
+      fi
+      if ! git -C "$REPO_DIR" push origin "$branch"; then
+        printf "${YELLOW}⚠ Failed to push machine configs to %s (%s)${RESET}\n" "$REPO_DIR" "$branch" >&2
+        return 1
+      fi
       printf "${BOLD}${GREEN}✨ Machine configs synced!${RESET}\n"
     else
       printf "${YELLOW}⚠ No 'origin' git remote configured in %s; changes committed locally.${RESET}\n" "$REPO_DIR"
@@ -551,6 +556,46 @@ cmd_lint() {
   return $failed
 }
 
+schedule_plist_content() {
+  local hour="$1"
+  local label="com.ryanmcquen.alleyuup"
+  local log="$HOME/Library/Logs/alleyuup.log"
+
+  cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/bin/alleyuup</string>
+    <string>--fast</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>ALLEYUUP_LOG</key>
+    <string>$log</string>
+    <key>ALLEYUUP_NOTIFY</key>
+    <string>1</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>$hour</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+</dict>
+</plist>
+PLIST
+}
+
 cmd_schedule() {
   local action="${1:-status}"
   local hour="${2:-3}"
@@ -578,41 +623,12 @@ cmd_schedule() {
         printf "Not scheduled. Run 'dots schedule install [hour]'.\n"
       fi
       ;;
+    print)
+      schedule_plist_content "$hour"
+      ;;
     install)
       mkdir -p "$plist_dir" "$(dirname "$log")"
-      cat > "$plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$label</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$HOME/bin/alleyuup</string>
-    <string>--fast</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-  </dict>
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Weekday</key>
-    <integer>0</integer>
-    <key>Hour</key>
-    <integer>$hour</integer>
-    <key>Minute</key>
-    <integer>0</integer>
-  </dict>
-  <key>StandardOutPath</key>
-  <string>$log</string>
-  <key>StandardErrorPath</key>
-  <string>$log</string>
-</dict>
-</plist>
-PLIST
+      schedule_plist_content "$hour" > "$plist"
       launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
       if launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1; then
         :
@@ -620,7 +636,7 @@ PLIST
         launchctl load -w "$plist" >/dev/null 2>&1 || true
       fi
       printf "${GREEN}✓ Scheduled weekly (Sunday %02d:00) -> %s${RESET}\n" "$hour" "$plist"
-      printf "  Log: %s\n" "$log"
+      printf "  Log: %s (rotated automatically)\n" "$log"
       ;;
     remove|uninstall)
       launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || launchctl unload -w "$plist" >/dev/null 2>&1 || true

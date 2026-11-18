@@ -20,7 +20,7 @@ complete -c dots -n '__fish_use_subcommand' -a version -d 'Print version'
 
 complete -c dots -n '__fish_seen_subcommand_from add' -F -d 'File to track'
 complete -c dots -n '__fish_seen_subcommand_from clean' -a '1 2 3 5 10' -d 'Backups to keep'
-complete -c dots -n '__fish_seen_subcommand_from schedule' -a 'install status remove' -d 'Action'
+complete -c dots -n '__fish_seen_subcommand_from schedule' -a 'install status print remove' -d 'Action'
 complete -c dots -n '__fish_seen_subcommand_from restore' -a '--schedule' -d 'Also install the weekly job'
 complete -c dots -n '__fish_seen_subcommand_from schedule' -a '0 1 2 3 4 5 6 7' -d 'Hour of day'
 complete -c dots -n '__fish_seen_subcommand_from repo' -a 'new' -d 'Create a new private Gist'
