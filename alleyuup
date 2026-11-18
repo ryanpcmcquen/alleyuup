@@ -7,7 +7,7 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 # Disable interactive confirmation prompts in Homebrew
 export HOMEBREW_NO_ASK=1
 
-ALLEYUUP_VERSION="1.3.1"
+ALLEYUUP_VERSION="1.4.0"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -31,8 +31,9 @@ ALLEYUUP_OVERRIDABLE_VARS=(
   ALLEYUUP_BREW_GREEDY ALLEYUUP_BREW_CLEANUP ALLEYUUP_MAS ALLEYUUP_AGY
   ALLEYUUP_CLAUDE ALLEYUUP_OPENCODE_STANDALONE ALLEYUUP_OPENCLAW ALLEYUUP_NVM
   ALLEYUUP_NPM ALLEYUUP_PNPM ALLEYUUP_RUSTUP ALLEYUUP_UV ALLEYUUP_PIPX
-  ALLEYUUP_GH_EXT ALLEYUUP_CODE_REPOS ALLEYUUP_CODE_DIR ALLEYUUP_LOCAL_PROJECTS
-  ALLEYUUP_BREWFILE ALLEYUUP_REPO_SYNC ALLEYUUP_SHELL ALLEYUUP_MACOS
+  ALLEYUUP_GH_EXT ALLEYUUP_CODE_REPOS ALLEYUUP_CODE_DIR ALLEYUUP_FLINT
+  ALLEYUUP_SCRIBE ALLEYUUP_JOBS ALLEYUUP_BREWFILE ALLEYUUP_REPO_SYNC
+  ALLEYUUP_SHELL ALLEYUUP_MACOS
   ALLEYUUP_MACOS_MAJOR ALLEYUUP_MACOS_CHECK_HOURS ALLEYUUP_REPO_DIR
   ALLEYUUP_DRY_RUN ALLEYUUP_LOG
 )
@@ -70,7 +71,9 @@ unset _alleyuup_env_var
 : "${ALLEYUUP_GH_EXT:=1}"
 : "${ALLEYUUP_CODE_REPOS:=1}"
 : "${ALLEYUUP_CODE_DIR:=$HOME/code}"
-: "${ALLEYUUP_LOCAL_PROJECTS:=1}"
+: "${ALLEYUUP_FLINT:=1}"
+: "${ALLEYUUP_SCRIBE:=1}"
+: "${ALLEYUUP_JOBS:=6}"
 : "${ALLEYUUP_BREWFILE:=1}"
 : "${ALLEYUUP_REPO_SYNC:=1}"
 : "${ALLEYUUP_SHELL:=1}"
@@ -128,7 +131,30 @@ ALLEYUUP_DEFAULT_BRANCHES=("main" "master" "dev" "staging")
 # Step keys accepted by --only / --skip
 ALLEYUUP_STEP_KEYS=(
   self-update brew mas agy claude opencode openclaw nvm npm pnpm rustup uv pipx
-  gh-ext repos local-projects brewfile repo-sync shell macos
+  gh-ext repos flint scribe local-projects brewfile repo-sync shell macos
+)
+
+# Underlying toggles (one per real step; --print-steps reports these)
+ALLEYUUP_STEP_VARS=(
+  ALLEYUUP_SELF_UPDATE ALLEYUUP_BREW ALLEYUUP_MAS ALLEYUUP_AGY ALLEYUUP_CLAUDE
+  ALLEYUUP_OPENCODE_STANDALONE ALLEYUUP_OPENCLAW ALLEYUUP_NVM ALLEYUUP_NPM
+  ALLEYUUP_PNPM ALLEYUUP_RUSTUP ALLEYUUP_UV ALLEYUUP_PIPX ALLEYUUP_GH_EXT
+  ALLEYUUP_CODE_REPOS ALLEYUUP_FLINT ALLEYUUP_SCRIBE ALLEYUUP_BREWFILE
+  ALLEYUUP_REPO_SYNC ALLEYUUP_SHELL ALLEYUUP_MACOS
+)
+
+# Path fragments that must never be tracked in the config Gist
+ALLEYUUP_SENSITIVE_PATTERNS=(
+  "/.ssh/"
+  "/.gnupg/"
+  "/.aws/credentials"
+  "/.netrc"
+  "/gh/hosts.yml"
+  "/opencode/service.json"
+  "/id_rsa"
+  "/id_ed25519"
+  "/credentials.json"
+  "/.env"
 )
 
 # Optional exclusion arrays (can be populated in ~/.config/alleyuup/config)
@@ -348,7 +374,9 @@ ALLEYUUP_PIPX=1                 # Upgrade pipx packages
 ALLEYUUP_GH_EXT=1               # Upgrade GitHub CLI extensions
 ALLEYUUP_CODE_REPOS=1           # Walk git repos in ALLEYUUP_CODE_DIR, pull, and report branches
 ALLEYUUP_CODE_DIR="$HOME/code"  # Directory to scan for git repositories
-ALLEYUUP_LOCAL_PROJECTS=1       # Build & install local CLI repos (flint, scribe) after pulling
+ALLEYUUP_JOBS=6                 # Max parallel git pulls at once
+ALLEYUUP_FLINT=1                # Rebuild & install flint when its sources change
+ALLEYUUP_SCRIBE=1               # Rebuild & install scribe when its sources change
 ALLEYUUP_REPO_DIR=""            # Optional path to this machine's config/Brewfile git repo
 ALLEYUUP_BREWFILE=1             # Refresh tracked Brewfile in machine config repo
 ALLEYUUP_REPO_SYNC=1            # Collect local configs, commit, and push to machine config repo
@@ -413,6 +441,7 @@ Options:
   --print-config       Print the path and contents of $CONFIG_FILE
   --print-steps        Print resolved step toggles and exit
   --print-mappings     Print tracked config file mappings and exit
+  --print-sensitive-patterns  Print paths that must never be tracked and exit
   --check              Check version and whether a newer version is available on remote
   -v, --version        Print alleyuup version and git revision
   -h, --help           Show this help message
@@ -443,6 +472,7 @@ ONLY_STEPS=""
 SKIP_STEPS=""
 PRINT_STEPS=0
 PRINT_MAPPINGS=0
+PRINT_SENSITIVE=0
 while (( $# > 0 )); do
   arg="$1"
   shift
@@ -478,6 +508,9 @@ while (( $# > 0 )); do
       ;;
     --print-mappings)
       PRINT_MAPPINGS=1
+      ;;
+    --print-sensitive-patterns)
+      PRINT_SENSITIVE=1
       ;;
     --repo)
       RUN_CONFIGURE_REPO=1
@@ -655,7 +688,8 @@ step_var_for() {
     pipx) printf 'ALLEYUUP_PIPX\n' ;;
     gh-ext|gh) printf 'ALLEYUUP_GH_EXT\n' ;;
     repos) printf 'ALLEYUUP_CODE_REPOS\n' ;;
-    local-projects) printf 'ALLEYUUP_LOCAL_PROJECTS\n' ;;
+    flint) printf 'ALLEYUUP_FLINT\n' ;;
+    scribe) printf 'ALLEYUUP_SCRIBE\n' ;;
     brewfile) printf 'ALLEYUUP_BREWFILE\n' ;;
     repo-sync|configs) printf 'ALLEYUUP_REPO_SYNC\n' ;;
     shell) printf 'ALLEYUUP_SHELL\n' ;;
@@ -664,23 +698,39 @@ step_var_for() {
   esac
 }
 
+# Set a step (or a group like local-projects) on or off
+set_step_state() {
+  local key="$1" value="$2" var
+  case "$key" in
+    local-projects)
+      printf -v ALLEYUUP_FLINT '%s' "$value"
+      printf -v ALLEYUUP_SCRIBE '%s' "$value"
+      ;;
+    *)
+      if ! var="$(step_var_for "$key")"; then
+        return 1
+      fi
+      printf -v "$var" '%s' "$value"
+      ;;
+  esac
+  return 0
+}
+
 apply_step_filters() {
   local key var list
   if [[ -n "${ONLY_STEPS:-}" ]]; then
-    for key in "${ALLEYUUP_STEP_KEYS[@]}"; do
-      var="$(step_var_for "$key")" || continue
+    for var in "${ALLEYUUP_STEP_VARS[@]}"; do
       printf -v "$var" '%s' 0
     done
     list="${ONLY_STEPS// /}"
     local IFS=','
     for key in $list; do
       [[ -z "$key" ]] && continue
-      if ! var="$(step_var_for "$key")"; then
+      if ! set_step_state "$key" 1; then
         printf "${RED}Unknown step for --only: %s${RESET}\n" "$key" >&2
         printf "Valid steps: %s\n" "${ALLEYUUP_STEP_KEYS[*]}" >&2
         return 1
       fi
-      printf -v "$var" '%s' 1
     done
   fi
 
@@ -689,21 +739,19 @@ apply_step_filters() {
     local IFS=','
     for key in $list; do
       [[ -z "$key" ]] && continue
-      if ! var="$(step_var_for "$key")"; then
+      if ! set_step_state "$key" 0; then
         printf "${RED}Unknown step for --skip: %s${RESET}\n" "$key" >&2
         printf "Valid steps: %s\n" "${ALLEYUUP_STEP_KEYS[*]}" >&2
         return 1
       fi
-      printf -v "$var" '%s' 0
     done
   fi
   return 0
 }
 
 print_steps() {
-  local key var
-  for key in "${ALLEYUUP_STEP_KEYS[@]}"; do
-    var="$(step_var_for "$key")" || continue
+  local var
+  for var in "${ALLEYUUP_STEP_VARS[@]}"; do
     printf '%s=%s\n' "$var" "${!var}"
   done
   printf 'ALLEYUUP_DRY_RUN=%s\n' "$ALLEYUUP_DRY_RUN"
@@ -716,6 +764,36 @@ print_mappings() {
   done
 }
 
+print_sensitive_patterns() {
+  local p
+  for p in "${ALLEYUUP_SENSITIVE_PATTERNS[@]}"; do
+    printf '%s\n' "$p"
+  done
+}
+
+# True when a path looks like it holds credentials and must not be tracked
+is_sensitive_path() {
+  local path="$1" p
+  for p in "${ALLEYUUP_SENSITIVE_PATTERNS[@]}"; do
+    if [[ "$path" == *"$p"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+rotate_log() {
+  local log_file="$1"
+  local max_bytes=$((5 * 1024 * 1024))
+  [[ -f "$log_file" ]] || return 0
+  local size
+  size="$(wc -c < "$log_file" 2>/dev/null | tr -d ' ')"
+  [[ "$size" =~ ^[0-9]+$ ]] || return 0
+  if (( size > max_bytes )); then
+    tail -n 500 "$log_file" > "$log_file.tmp" 2>/dev/null && mv "$log_file.tmp" "$log_file"
+  fi
+}
+
 start_logging() {
   [[ -n "${ALLEYUUP_LOG:-}" ]] || return 0
   local log_file="$ALLEYUUP_LOG"
@@ -724,6 +802,7 @@ start_logging() {
   fi
   log_file="${log_file/#\~/$HOME}"
   mkdir -p "$(dirname "$log_file")" 2>/dev/null || return 0
+  rotate_log "$log_file"
   printf '\n===== alleyuup %s (%s) =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(date '+%Z')" >> "$log_file"
   exec > >(tee -a "$log_file") 2>&1
 }
@@ -1039,6 +1118,11 @@ update_code_repos() {
     } > "$work_dir/$idx.meta"
 
     if [[ -z "$skip_reason" ]]; then
+      local jobs_cap="${ALLEYUUP_JOBS:-6}"
+      [[ "$jobs_cap" =~ ^[0-9]+$ ]] && (( jobs_cap > 0 )) || jobs_cap=6
+      while (( $(jobs -pr | wc -l | tr -d ' ') >= jobs_cap )); do
+        sleep 0.05
+      done
       (
         if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
           export GIT_SSH_COMMAND="ssh -o BatchMode=yes"
@@ -1132,7 +1216,7 @@ update_local_projects() {
   local failed=0
 
   local flint_dir="$ALLEYUUP_CODE_DIR/flint"
-  if [[ -f "$flint_dir/Makefile" ]] && command -v make >/dev/null 2>&1; then
+  if (( ALLEYUUP_FLINT == 1 )) && [[ -f "$flint_dir/Makefile" ]] && command -v make >/dev/null 2>&1; then
     local need_flint=0 copied_flint=0 flint_msg=""
     if [[ ! -x "$flint_dir/flint" ]] || [[ ! -x "$HOME/bin/flint" ]]; then
       need_flint=1
@@ -1170,7 +1254,7 @@ update_local_projects() {
   fi
 
   local scribe_dir="$ALLEYUUP_CODE_DIR/scribe"
-  if [[ -f "$scribe_dir/package.json" ]] && has_working_cmd npm; then
+  if (( ALLEYUUP_SCRIBE == 1 )) && [[ -f "$scribe_dir/package.json" ]] && has_working_cmd npm; then
     local need_scribe=0 scribe_msg=""
     if [[ ! -d "$scribe_dir/node_modules" ]] || [[ ! -f "$scribe_dir/dist/cli.js" ]]; then
       need_scribe=1
@@ -1281,6 +1365,11 @@ sync_machine_repo() {
     repo_name="${entry%%:*}"
     target="${entry#*:}"
     source_path="$machine_repo/$repo_name"
+
+    if is_sensitive_path "$target"; then
+      printf "${YELLOW}⚠ Refusing to track sensitive path: %s${RESET}\n" "$target"
+      continue
+    fi
 
     if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$source_path" ]]; then
       continue
@@ -1473,6 +1562,11 @@ if (( PRINT_MAPPINGS == 1 )); then
   exit 0
 fi
 
+if (( PRINT_SENSITIVE == 1 )); then
+  print_sensitive_patterns
+  exit 0
+fi
+
 if (( PRINT_STEPS == 1 )); then
   print_steps
   exit 0
@@ -1583,7 +1677,8 @@ if (( ALLEYUUP_CODE_REPOS == 1 )); then
 fi
 
 # 5b. Build & install local CLI projects (flint, scribe)
-if (( ALLEYUUP_LOCAL_PROJECTS == 1 )) && [[ -d "$ALLEYUUP_CODE_DIR/flint" || -d "$ALLEYUUP_CODE_DIR/scribe" ]]; then
+if [[ -d "$ALLEYUUP_CODE_DIR/flint" || -d "$ALLEYUUP_CODE_DIR/scribe" ]] \
+  && { (( ALLEYUUP_FLINT == 1 )) || (( ALLEYUUP_SCRIBE == 1 )); }; then
   run_step "Local CLI Projects" update_local_projects
 fi
 

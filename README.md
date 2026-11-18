@@ -77,14 +77,16 @@ alleyuup --print-steps   # Print resolved step toggles (debugging)
 ```
 
 Step keys for `--only`/`--skip`:
-`self-update brew mas agy claude opencode openclaw nvm npm pnpm rustup uv pipx gh-ext repos local-projects brewfile repo-sync shell macos`
+`self-update brew mas agy claude opencode openclaw nvm npm pnpm rustup uv pipx gh-ext repos flint scribe local-projects brewfile repo-sync shell macos`
 
 Notes:
 - Precedence is `defaults < ~/.config/alleyuup/config < environment < CLI flags`, so `ALLEYUUP_BREW=0 alleyuup` works for a one-off run.
-- Repository pulls run in parallel, and only repos whose local `HEAD` moved are reported as `updated`.
+- `flint` and `scribe` build independently; `local-projects` is shorthand for both (e.g. `alleyuup --skip scribe`).
+- Repository pulls run in parallel, capped by `ALLEYUUP_JOBS` (default `6`), and only repos whose local `HEAD` moved are reported as `updated`.
 - The macOS update scan is cached for `ALLEYUUP_MACOS_CHECK_HOURS` (default `24`) so `softwareupdate -l` is not paid on every run. Set it to `0` to always rescan.
 - A lock prevents overlapping runs, so two logins can't collide on Homebrew, npm, or the Gist.
-- Set `ALLEYUUP_LOG=1` (or a path) to tee output to `~/Library/Logs/alleyuup.log`.
+- Set `ALLEYUUP_LOG=1` (or a path) to tee output to `~/Library/Logs/alleyuup.log`; the log is rotated to the last 500 lines once it exceeds 5 MB.
+- Tracked paths are checked against a sensitive deny-list (`~/.ssh`, `~/.gnupg`, `gh/hosts.yml`, `opencode/service.json`, …), so credentials cannot be committed by accident.
 
 ### `dots`
 ```sh
@@ -95,6 +97,9 @@ dots pull               # Pull latest changes for both tools and machine Gists &
 dots link               # Symlink alleyuup, dots, and all machine config files
 dots add <file> [name]  # Track a new config file in the machine Gist
 dots clean [keep]       # Prune stale '.bak.<timestamp>' backups (keeps newest 3)
+dots doctor             # Health check: links, completions, repo, PATH, schedule
+dots restore            # Install Brewfile packages and link everything (brew bootstrap)
+dots restore --schedule # Same, plus install the weekly job
 dots lint               # bash -n + shellcheck (if installed) + test suite
 dots schedule install   # Weekly launchd run (Sunday 03:00), logs to ~/Library/Logs
 dots schedule status    # Show schedule state

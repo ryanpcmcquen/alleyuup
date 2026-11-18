@@ -1,7 +1,7 @@
 #compdef dots
 
 _arguments -s \
-  '1:command:(link status diff brewfile sync pull add clean lint schedule repo path version help)' \
+  '1:command:(link status diff brewfile sync pull add clean doctor restore lint schedule repo path version help)' \
   '*::arg:->args'
 
 case $state in
@@ -23,6 +23,9 @@ case $state in
         ;;
       repo)
         _message 'local path, Gist ID/URL, or new'
+        ;;
+      restore)
+        _arguments '--schedule[Also install the weekly job]'
         ;;
     esac
     ;;

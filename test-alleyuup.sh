@@ -89,11 +89,27 @@ check "tracked filenames are unique" "0" "$(printf '%s\n' "$mappings" | cut -d: 
 check_contains "tracks fish config" "config.fish:" "$mappings"
 check_contains "tracks alleyuup config" "alleyuup.conf:" "$mappings"
 
+sensitive="$(ALLEYUUP_CONFIG="$PLAIN_CONFIG" "$ALLEYUUP" --print-sensitive-patterns 2>/dev/null)"
+check_contains "sensitive patterns include ssh" "/.ssh/" "$sensitive"
+check_contains "sensitive patterns include gh hosts" "/gh/hosts.yml" "$sensitive"
+
 printf '\nCLI: step filters\n'
 steps="$(ALLEYUUP_CONFIG="$PLAIN_CONFIG" "$ALLEYUUP" --skip brew,mas --print-steps 2>/dev/null)"
 check_contains "--skip disables brew" "ALLEYUUP_BREW=0" "$steps"
 check_contains "--skip disables mas" "ALLEYUUP_MAS=0" "$steps"
 check_contains "--skip leaves others enabled" "ALLEYUUP_NPM=1" "$steps"
+
+steps="$(ALLEYUUP_CONFIG="$PLAIN_CONFIG" "$ALLEYUUP" --skip scribe --print-steps 2>/dev/null)"
+check_contains "--skip scribe disables scribe" "ALLEYUUP_SCRIBE=0" "$steps"
+check_contains "--skip scribe leaves flint" "ALLEYUUP_FLINT=1" "$steps"
+
+steps="$(ALLEYUUP_CONFIG="$PLAIN_CONFIG" "$ALLEYUUP" --skip local-projects --print-steps 2>/dev/null)"
+check_contains "--skip local-projects disables flint" "ALLEYUUP_FLINT=0" "$steps"
+check_contains "--skip local-projects disables scribe" "ALLEYUUP_SCRIBE=0" "$steps"
+
+steps="$(ALLEYUUP_CONFIG="$PLAIN_CONFIG" "$ALLEYUUP" --only flint --print-steps 2>/dev/null)"
+check_contains "--only flint enables flint" "ALLEYUUP_FLINT=1" "$steps"
+check_contains "--only flint leaves scribe off" "ALLEYUUP_SCRIBE=0" "$steps"
 
 steps="$(ALLEYUUP_CONFIG="$PLAIN_CONFIG" "$ALLEYUUP" --only repos --print-steps 2>/dev/null)"
 check_contains "--only enables repos" "ALLEYUUP_CODE_REPOS=1" "$steps"

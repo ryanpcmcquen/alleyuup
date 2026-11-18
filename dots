@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.3.0"
+DOTS_VERSION="1.4.0"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -41,32 +41,68 @@ resolve_tools_dir() {
 }
 
 # The tracked-file mapping list lives in alleyuup (single source of truth)
-load_mappings() {
-  MAPPINGS=()
-  local alleyuup_bin="" line tools_dir=""
+ALLEYUUP_BIN=""
+SENSITIVE_PATTERNS=()
 
+resolve_alleyuup_bin() {
+  [[ -n "$ALLEYUUP_BIN" ]] && return 0
+  local tools_dir=""
   if tools_dir="$(resolve_tools_dir 2>/dev/null)"; then
     if [[ -x "$tools_dir/alleyuup" ]]; then
-      alleyuup_bin="$tools_dir/alleyuup"
+      ALLEYUUP_BIN="$tools_dir/alleyuup"
     fi
   fi
-  if [[ -z "$alleyuup_bin" ]] && command -v alleyuup >/dev/null 2>&1; then
-    alleyuup_bin="$(command -v alleyuup)"
+  if [[ -z "$ALLEYUUP_BIN" ]] && command -v alleyuup >/dev/null 2>&1; then
+    ALLEYUUP_BIN="$(command -v alleyuup)"
   fi
+  [[ -n "$ALLEYUUP_BIN" ]]
+}
 
-  if [[ -z "$alleyuup_bin" ]]; then
+load_sensitive_patterns() {
+  (( ${#SENSITIVE_PATTERNS[@]} > 0 )) && return 0
+  resolve_alleyuup_bin || return 1
+  local line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && SENSITIVE_PATTERNS+=("$line")
+  done < <("$ALLEYUUP_BIN" --print-sensitive-patterns 2>/dev/null)
+  (( ${#SENSITIVE_PATTERNS[@]} > 0 ))
+}
+
+is_sensitive_path() {
+  local path="$1" pattern
+  load_sensitive_patterns || return 1
+  for pattern in "${SENSITIVE_PATTERNS[@]}"; do
+    [[ "$path" == *"$pattern"* ]] && return 0
+  done
+  return 1
+}
+
+load_mappings() {
+  MAPPINGS=()
+  local line entry target
+
+  if ! resolve_alleyuup_bin; then
     printf "${RED}dots requires 'alleyuup' in the same tools repo; re-run install.sh.${RESET}\n" >&2
-    exit 1
+    return 1
   fi
 
   while IFS= read -r line; do
     [[ -n "$line" ]] && MAPPINGS+=("$line")
-  done < <("$alleyuup_bin" --print-mappings 2>/dev/null)
+  done < <("$ALLEYUUP_BIN" --print-mappings 2>/dev/null)
 
   if (( ${#MAPPINGS[@]} == 0 )); then
-    printf "${RED}Could not read tracked file mappings from %s.${RESET}\n" "$alleyuup_bin" >&2
-    exit 1
+    printf "${RED}Could not read tracked file mappings from %s.${RESET}\n" "$ALLEYUUP_BIN" >&2
+    return 1
   fi
+
+  for entry in "${MAPPINGS[@]}"; do
+    target="${entry#*:}"
+    if is_sensitive_path "$target"; then
+      printf "${RED}Refusing to manage sensitive path: %s${RESET}\n" "$target" >&2
+      return 1
+    fi
+  done
+  return 0
 }
 
 write_default_readme() {
@@ -224,6 +260,8 @@ Commands:
   pull              Pull latest changes from remote and re-verify symlinks
   add <path> [name] Move a local file into the machine config repo and symlink it
   clean [keep]      Remove stale '.bak.<timestamp>' backups (keeps newest 3 by default)
+  doctor            Health check: links, completions, repo, PATH, schedule
+  restore [--schedule]  Install Brewfile packages, link configs, optionally schedule
   lint              Syntax-check the scripts and run the test suite
   schedule [...]    Weekly launchd run: 'install [hour]', 'status', or 'remove'
   repo [target]     View or change the config repo for this machine (path, Gist ID/URL, or 'new')
@@ -289,7 +327,7 @@ cmd_link() {
     fi
   fi
 
-  load_mappings
+  load_mappings || exit 1
   ensure_repo_dir
 
   # Ensure alleyuup.conf exists in the machine repo so it can be linked and customized
@@ -337,7 +375,7 @@ cmd_status() {
     printf "\n"
   fi
 
-  load_mappings
+  load_mappings || exit 1
   ensure_repo_dir
   printf "${BLUE}==> Machine Config Symlinks (%s)${RESET}\n" "$REPO_DIR"
   for entry in "${MAPPINGS[@]}"; do
@@ -422,7 +460,7 @@ cmd_pull() {
 }
 
 cmd_clean() {
-  load_mappings
+  load_mappings || exit 1
   local keep="${1:-3}"
   if ! [[ "$keep" =~ ^[0-9]+$ ]]; then
     printf "${RED}Usage: dots clean [keep-count]${RESET}\n" >&2
@@ -472,6 +510,13 @@ cmd_lint() {
       failed=1
     fi
   done
+
+  printf "\n${BLUE}==> tracked mappings${RESET}\n"
+  if load_mappings; then
+    printf "  ✓ %d mappings, no sensitive paths\n" "${#MAPPINGS[@]}"
+  else
+    failed=1
+  fi
 
   if command -v shellcheck >/dev/null 2>&1; then
     printf "\n${BLUE}==> shellcheck (warning+)${RESET}\n"
@@ -585,6 +630,196 @@ PLIST
   esac
 }
 
+HEALTH_WARNINGS=0
+HEALTH_PROBLEMS=0
+
+health_ok() {
+  printf "  ${GREEN}✓${RESET} %s\n" "$1"
+}
+
+health_warn() {
+  HEALTH_WARNINGS=$((HEALTH_WARNINGS + 1))
+  printf "  ${YELLOW}⚠${RESET} %s\n" "$1"
+}
+
+health_bad() {
+  HEALTH_PROBLEMS=$((HEALTH_PROBLEMS + 1))
+  printf "  ${RED}✗${RESET} %s\n" "$1"
+}
+
+cmd_doctor() {
+  HEALTH_WARNINGS=0
+  HEALTH_PROBLEMS=0
+  local tools_dir="" entry repo_name target source_path linked=0 unlinked=0 absent=0
+  local repo_dir=""
+
+  printf "${BLUE}==> Shared scripts${RESET}\n"
+  if tools_dir="$(resolve_tools_dir 2>/dev/null)"; then
+    health_ok "tools repo: $tools_dir"
+    local tool
+    for tool in alleyuup dots; do
+      target="$HOME/bin/$tool"
+      source_path="$tools_dir/$tool"
+      if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$source_path" ]]; then
+        health_ok "~/bin/$tool linked"
+      else
+        health_bad "~/bin/$tool is not linked (run 'dots link')"
+      fi
+    done
+    if [[ -n "$(git -C "$tools_dir" status --porcelain 2>/dev/null)" ]]; then
+      health_warn "tools repo has uncommitted changes"
+    fi
+  else
+    health_warn "dots is not running from a git clone; run install.sh"
+  fi
+
+  printf "\n${BLUE}==> Completions${RESET}\n"
+  local fish_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
+  if [[ -f "$fish_dir/alleyuup.fish" ]] && [[ -f "$fish_dir/dots.fish" ]]; then
+    health_ok "fish: $fish_dir"
+  else
+    health_warn "fish completions not linked (run 'dots link')"
+  fi
+  local zsh_dir="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions"
+  if [[ -f "$zsh_dir/_alleyuup" ]] && [[ -f "$zsh_dir/_dots" ]]; then
+    health_ok "zsh: $zsh_dir"
+  else
+    health_warn "zsh completions not linked (run 'dots link')"
+  fi
+
+  printf "\n${BLUE}==> Machine repo${RESET}\n"
+  if [[ -f "$REPO_CONFIG_FILE" ]]; then
+    repo_dir="$(head -n 1 "$REPO_CONFIG_FILE" | tr -d '\r\n')"
+    if [[ -n "$repo_dir" ]] && [[ -d "$repo_dir" ]]; then
+      health_ok "configured: $repo_dir"
+      if [[ -d "$repo_dir/.git" ]]; then
+        health_ok "is a git repo"
+        if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null)" ]]; then
+          health_ok "working tree clean"
+        else
+          health_warn "working tree has changes (run 'dots sync')"
+        fi
+        if git -C "$repo_dir" remote get-url origin >/dev/null 2>&1; then
+          health_ok "origin remote configured"
+        else
+          health_warn "no origin remote; changes will stay local"
+        fi
+      else
+        health_bad "$repo_dir is not a git repo"
+      fi
+    else
+      health_bad "configured repo missing: ${repo_dir:-<empty>}"
+    fi
+  else
+    health_warn "no machine repo configured (run 'dots repo')"
+  fi
+
+  printf "\n${BLUE}==> Tracked configs${RESET}\n"
+  if load_mappings; then
+    local sensitive=0
+    for entry in "${MAPPINGS[@]}"; do
+      repo_name="${entry%%:*}"
+      target="${entry#*:}"
+      if is_sensitive_path "$target"; then
+        health_bad "sensitive path in mappings: $target"
+        sensitive=1
+      fi
+      if [[ -n "$repo_dir" ]]; then
+        source_path="$repo_dir/$repo_name"
+        if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$source_path" ]]; then
+          linked=$((linked + 1))
+        elif [[ -e "$source_path" ]]; then
+          unlinked=$((unlinked + 1))
+        else
+          absent=$((absent + 1))
+        fi
+      fi
+    done
+    health_ok "read ${#MAPPINGS[@]} mappings from alleyuup"
+    if (( sensitive == 0 )); then
+      health_ok "no sensitive paths tracked"
+    fi
+    if [[ -n "$repo_dir" ]]; then
+      if (( unlinked > 0 )); then
+        health_warn "$unlinked tracked file(s) not linked (run 'dots link')"
+      else
+        health_ok "$linked tracked file(s) linked"
+      fi
+      if (( absent > 0 )); then
+        health_warn "$absent mapped file(s) absent on this machine (fine if unused)"
+      fi
+    fi
+  else
+    health_bad "could not load tracked file mappings"
+  fi
+
+  printf "\n${BLUE}==> Environment${RESET}\n"
+  if [[ ":$PATH:" == *":$HOME/bin:"* ]]; then
+    health_ok "~/bin is on PATH"
+  else
+    health_warn "~/bin is not on PATH"
+  fi
+  if command -v alleyuup >/dev/null 2>&1; then
+    health_ok "alleyuup: $(alleyuup --version 2>/dev/null | head -n 1)"
+  else
+    health_bad "alleyuup not found on PATH"
+  fi
+
+  printf "\n${BLUE}==> Schedule${RESET}\n"
+  local label="com.ryanmcquen.alleyuup"
+  local plist="$HOME/Library/LaunchAgents/$label.plist"
+  if [[ -f "$plist" ]]; then
+    if launchctl list "$label" >/dev/null 2>&1; then
+      health_ok "weekly job loaded"
+    else
+      health_warn "plist exists but job is not loaded"
+    fi
+  else
+    health_warn "no weekly job (run 'dots schedule install')"
+  fi
+
+  printf "\n"
+  if (( HEALTH_PROBLEMS > 0 )); then
+    printf "${RED}✗ %d problem(s), %d warning(s).${RESET}\n" "$HEALTH_PROBLEMS" "$HEALTH_WARNINGS"
+    return 1
+  elif (( HEALTH_WARNINGS > 0 )); then
+    printf "${YELLOW}⚠ %d warning(s), no problems.${RESET}\n" "$HEALTH_WARNINGS"
+    return 0
+  else
+    printf "${GREEN}✓ All checks passed.${RESET}\n"
+    return 0
+  fi
+}
+
+cmd_restore() {
+  local with_schedule=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --schedule) with_schedule=1 ;;
+    esac
+  done
+
+  ensure_repo_dir
+  printf "${BLUE}==> Restoring from %s${RESET}\n" "$REPO_DIR"
+
+  if command -v brew >/dev/null 2>&1 && [[ -f "$REPO_DIR/Brewfile" ]]; then
+    printf "${BLUE}==> Installing packages from Brewfile${RESET}\n"
+    if ! brew bundle --file="$REPO_DIR/Brewfile" --no-lock; then
+      printf "${YELLOW}⚠ brew bundle exited with errors; continuing.${RESET}\n"
+    fi
+  else
+    printf "${YELLOW}⚠ Homebrew or Brewfile missing; skipping package restore.${RESET}\n"
+  fi
+
+  cmd_link
+
+  if (( with_schedule == 1 )); then
+    cmd_schedule install
+  fi
+
+  printf "\n${BOLD}${GREEN}✨ Restore complete.${RESET}\n"
+}
+
 cmd_add() {
   ensure_repo_dir
   local target="${1:-}"
@@ -601,6 +836,12 @@ cmd_add() {
 
   local abs_target
   abs_target="$(cd -P "$(dirname "$target")" && pwd)/$(basename "$target")"
+
+  if is_sensitive_path "$abs_target"; then
+    printf "${RED}Refusing to track sensitive path: %s${RESET}\n" "$abs_target" >&2
+    exit 1
+  fi
+
   local repo_name="${2:-$(basename "$abs_target")}"
   repo_name="${repo_name#.}"
   local dest="$REPO_DIR/$repo_name"
@@ -662,6 +903,12 @@ case "$COMMAND" in
     ;;
   lint|test)
     cmd_lint
+    ;;
+  doctor|health)
+    cmd_doctor
+    ;;
+  restore)
+    cmd_restore "${1:-}"
     ;;
   schedule|sched)
     cmd_schedule "${1:-status}" "${2:-3}"
