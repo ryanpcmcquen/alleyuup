@@ -7,7 +7,11 @@ export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.openclaw/bin:/opt/homebrew/bin:/o
 # Disable interactive confirmation prompts in Homebrew
 export HOMEBREW_NO_ASK=1
 
-ALLEYUUP_VERSION="1.4.2"
+# Abort stalled git HTTP transfers instead of hanging forever
+export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1000}"
+export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-30}"
+
+ALLEYUUP_VERSION="1.4.3"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -32,8 +36,8 @@ ALLEYUUP_OVERRIDABLE_VARS=(
   ALLEYUUP_CLAUDE ALLEYUUP_OPENCODE_STANDALONE ALLEYUUP_OPENCLAW ALLEYUUP_NVM
   ALLEYUUP_NPM ALLEYUUP_PNPM ALLEYUUP_RUSTUP ALLEYUUP_UV ALLEYUUP_PIPX
   ALLEYUUP_GH_EXT ALLEYUUP_CODE_REPOS ALLEYUUP_CODE_DIR ALLEYUUP_FLINT
-  ALLEYUUP_SCRIBE ALLEYUUP_JOBS ALLEYUUP_BREWFILE ALLEYUUP_REPO_SYNC
-  ALLEYUUP_SHELL ALLEYUUP_MACOS
+  ALLEYUUP_SCRIBE ALLEYUUP_JOBS ALLEYUUP_NET_TIMEOUT ALLEYUUP_LOCK_MAX_HOURS
+  ALLEYUUP_BREWFILE ALLEYUUP_REPO_SYNC ALLEYUUP_SHELL ALLEYUUP_MACOS
   ALLEYUUP_MACOS_MAJOR ALLEYUUP_MACOS_CHECK_HOURS ALLEYUUP_REPO_DIR
   ALLEYUUP_DRY_RUN ALLEYUUP_NOTIFY ALLEYUUP_LOG
 )
@@ -74,6 +78,8 @@ unset _alleyuup_env_var
 : "${ALLEYUUP_FLINT:=1}"
 : "${ALLEYUUP_SCRIBE:=1}"
 : "${ALLEYUUP_JOBS:=6}"
+: "${ALLEYUUP_NET_TIMEOUT:=180}"
+: "${ALLEYUUP_LOCK_MAX_HOURS:=6}"
 : "${ALLEYUUP_BREWFILE:=1}"
 : "${ALLEYUUP_REPO_SYNC:=1}"
 : "${ALLEYUUP_SHELL:=1}"
@@ -169,7 +175,7 @@ NON_DEFAULT_REPOS=()
 REPO_PULL_ERRORS=()
 CLEANUP_PATHS=()
 
-LOCK_DIR="${TMPDIR:-/tmp}/alleyuup.lock"
+LOCK_DIR="${ALLEYUUP_LOCK_DIR:-${TMPDIR:-/tmp}/alleyuup.lock}"
 LOCK_HELD=0
 
 MACHINE_REPO_LOADED=0
@@ -376,6 +382,8 @@ ALLEYUUP_GH_EXT=1               # Upgrade GitHub CLI extensions
 ALLEYUUP_CODE_REPOS=1           # Walk git repos in ALLEYUUP_CODE_DIR, pull, and report branches
 ALLEYUUP_CODE_DIR="$HOME/code"  # Directory to scan for git repositories
 ALLEYUUP_JOBS=6                 # Max parallel git pulls at once
+ALLEYUUP_NET_TIMEOUT=180        # Hard limit (seconds) for each network git operation
+ALLEYUUP_LOCK_MAX_HOURS=6       # Reclaim the run lock if it is older than this
 ALLEYUUP_FLINT=1                # Rebuild & install flint when its sources change
 ALLEYUUP_SCRIBE=1               # Rebuild & install scribe when its sources change
 ALLEYUUP_REPO_DIR=""            # Optional path to this machine's config/Brewfile git repo
@@ -640,7 +648,7 @@ in_array() {
 
 acquire_lock() {
   if mkdir "$LOCK_DIR" 2>/dev/null; then
-    printf '%s\n' "$$" > "$LOCK_DIR/pid"
+    write_lock_files
     LOCK_HELD=1
     return 0
   fi
@@ -651,14 +659,21 @@ acquire_lock() {
   fi
 
   if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
-    printf "${YELLOW}⚠ alleyuup is already running (pid %s); skipping this run.${RESET}\n" "$holder"
-    return 1
+    local max_hours="${ALLEYUUP_LOCK_MAX_HOURS:-6}"
+    local age=""
+    age="$(lock_age_seconds)"
+    if [[ "$max_hours" =~ ^[0-9]+$ ]] && (( max_hours > 0 )) && [[ "$age" =~ ^[0-9]+$ ]] && (( age > max_hours * 3600 )); then
+      printf "${YELLOW}⚠ Stale lock held by pid %s for %dh; taking over.${RESET}\n" "$holder" "$((age / 3600))"
+    else
+      printf "${YELLOW}⚠ alleyuup is already running (pid %s, %dm); skipping this run.${RESET}\n" "$holder" "$(( ${age:-0} / 60 ))"
+      return 1
+    fi
   fi
 
-  # Stale lock from an interrupted run
+  # Release a stale lock (dead pid, or exceeded the max age) and retry
   rm -rf "$LOCK_DIR"
   if mkdir "$LOCK_DIR" 2>/dev/null; then
-    printf '%s\n' "$$" > "$LOCK_DIR/pid"
+    write_lock_files
     LOCK_HELD=1
     return 0
   fi
@@ -671,6 +686,39 @@ release_lock() {
   if (( LOCK_HELD == 1 )); then
     rm -rf "$LOCK_DIR"
     LOCK_HELD=0
+  fi
+}
+
+write_lock_files() {
+  printf '%s\n' "$$" > "$LOCK_DIR/pid"
+  printf '%s\n' "$(date +%s)" > "$LOCK_DIR/started"
+}
+
+lock_age_seconds() {
+  local started="" mtime=""
+  if [[ -f "$LOCK_DIR/started" ]]; then
+    started="$(head -n 1 "$LOCK_DIR/started" 2>/dev/null | tr -d '\r\n' || true)"
+  fi
+  if [[ "$started" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$(( $(date +%s) - started ))"
+    return 0
+  fi
+  mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null || true)"
+  if [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$(( $(date +%s) - mtime ))"
+    return 0
+  fi
+  printf '0\n'
+}
+
+# Run a command under a hard wall-clock limit (perl ships with macOS)
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  if command -v perl >/dev/null 2>&1; then
+    perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"
+  else
+    "$@"
   fi
 }
 
@@ -857,9 +905,9 @@ self_update_tools() {
         local branch before_sha after_sha
         branch="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
         before_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
-        if ! git -C "$repo" pull --rebase --quiet origin "$branch" 2>/dev/null; then
+        if ! run_with_timeout 120 git -C "$repo" pull --rebase --quiet origin "$branch" 2>/dev/null; then
           # Fallback to HTTPS pull if SSH isn't configured on this machine
-          git -C "$repo" pull --rebase --quiet "https://gist.github.com/${TOOLS_GIST_ID}.git" "$branch"
+          run_with_timeout 120 git -C "$repo" pull --rebase --quiet "https://gist.github.com/${TOOLS_GIST_ID}.git" "$branch"
         fi
         after_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
         if [[ -n "$before_sha" ]] && [[ "$before_sha" != "$after_sha" ]]; then
@@ -1039,7 +1087,7 @@ run_repo_pull() {
   local before="" after="" pull_out="" status=0
 
   if is_dry_run; then
-    if git -C "$dir" fetch --all --quiet 2>/dev/null; then
+    if run_with_timeout "${ALLEYUUP_NET_TIMEOUT:-180}" git -C "$dir" fetch --all --quiet 2>/dev/null; then
       local behind=0
       behind="$(git -C "$dir" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)"
       printf 'DRY\t%s\t\n' "$behind" > "$out"
@@ -1052,7 +1100,7 @@ run_repo_pull() {
 
   before="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "")"
 
-  if pull_out="$(git -C "$dir" pull --all --quiet 2>&1)"; then
+  if pull_out="$(run_with_timeout "${ALLEYUUP_NET_TIMEOUT:-180}" git -C "$dir" pull --all --quiet 2>&1)"; then
     after="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "")"
     printf 'OK\t%s\t%s\n' "$before" "$after" > "$out"
   else
@@ -1147,7 +1195,7 @@ update_code_repos() {
       done
       (
         if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
-          export GIT_SSH_COMMAND="ssh -o BatchMode=yes"
+          export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
         fi
         export GIT_TERMINAL_PROMPT=0
         run_repo_pull "$dir" "$work_dir/$idx.result"

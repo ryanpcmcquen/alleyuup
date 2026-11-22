@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.4.2"
+DOTS_VERSION="1.4.3"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -790,6 +790,29 @@ cmd_doctor() {
     health_ok "alleyuup: $(alleyuup --version 2>/dev/null | head -n 1)"
   else
     health_bad "alleyuup not found on PATH"
+  fi
+
+  printf "\n${BLUE}==> Run state${RESET}\n"
+  local lock_dir="${ALLEYUUP_LOCK_DIR:-${TMPDIR:-/tmp}/alleyuup.lock}"
+  if [[ -d "$lock_dir" ]]; then
+    local lock_pid="" lock_started=""
+    if [[ -f "$lock_dir/pid" ]]; then
+      lock_pid="$(head -n 1 "$lock_dir/pid" 2>/dev/null | tr -d '\r\n')"
+    fi
+    if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2>/dev/null; then
+      if [[ -f "$lock_dir/started" ]]; then
+        lock_started="$(head -n 1 "$lock_dir/started" 2>/dev/null | tr -d '\r\n')"
+      fi
+      if [[ "$lock_started" =~ ^[0-9]+$ ]]; then
+        health_warn "alleyuup is running (pid $lock_pid, $(( ($(date +%s) - lock_started) / 60 ))m)"
+      else
+        health_warn "alleyuup is running (pid $lock_pid)"
+      fi
+    else
+      health_warn "stale run lock at $lock_dir (next run will reclaim it)"
+    fi
+  else
+    health_ok "no run in progress"
   fi
 
   printf "\n${BLUE}==> Schedule${RESET}\n"

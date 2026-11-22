@@ -85,7 +85,8 @@ Notes:
 - `flint` and `scribe` build independently; `local-projects` is shorthand for both (e.g. `alleyuup --skip scribe`).
 - Repository pulls run in parallel, capped by `ALLEYUUP_JOBS` (default `6`), and only repos whose local `HEAD` moved are reported as `updated`.
 - The macOS update scan is cached for `ALLEYUUP_MACOS_CHECK_HOURS` (default `24`) so `softwareupdate -l` is not paid on every run. Set it to `0` to always rescan.
-- A lock prevents overlapping runs, so two logins can't collide on Homebrew, npm, or the Gist.
+- A lock prevents overlapping runs, so two logins can't collide on Homebrew, npm, or the Gist; a lock older than `ALLEYUUP_LOCK_MAX_HOURS` (default `6`) is reclaimed so a hung run can't block future ones.
+- Network git operations are capped by `ALLEYUUP_NET_TIMEOUT` (default `180` seconds), with SSH `ConnectTimeout`/keepalives and git HTTP low-speed aborts, so a stalled remote cannot hang the run.
 - Set `ALLEYUUP_LOG=1` (or a path) to tee output to `~/Library/Logs/alleyuup.log`; the log is rotated to the last 500 lines once it exceeds 5 MB.
 - `ALLEYUUP_NOTIFY=1` posts a macOS notification when a run ends with failed steps (used by the weekly job).
 - Tracked paths are checked against a sensitive deny-list (`~/.ssh`, `~/.gnupg`, `gh/hosts.yml`, `opencode/service.json`, …), so credentials cannot be committed by accident.

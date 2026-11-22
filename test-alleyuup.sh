@@ -137,6 +137,34 @@ rot_lines="$(run_helper "$rot_dir" 'rotate_log "$FIXTURE/big.log"; wc -l < "$FIX
 check "rotate_log keeps the last 500 lines" "500" "$rot_lines"
 rm -rf "$rot_dir"
 
+printf '\nrun_with_timeout\n'
+t_start="$(date +%s)"
+run_helper "" 'run_with_timeout 1 sleep 5' >/dev/null 2>&1
+t_status=$?
+t_elapsed=$(( $(date +%s) - t_start ))
+check "timeout aborts a slow command" "yes" "$([[ $t_status -ne 0 ]] && echo yes || echo no)"
+check "timeout returns promptly" "yes" "$([[ $t_elapsed -le 3 ]] && echo yes || echo no)"
+
+printf '\nrun lock\n'
+lock_root="$(mktemp -d "${TMPDIR:-/tmp}/alleyuup-lock.XXXXXX")"
+lock_dir="$lock_root/lock"
+mkdir -p "$lock_dir"
+printf '%s\n' "$$" > "$lock_dir/pid"
+date +%s > "$lock_dir/started"
+active_out="$(ALLEYUUP_LOCK_DIR="$lock_dir" ALLEYUUP_CONFIG="$PLAIN_CONFIG" "$ALLEYUUP" --only self-update --dry-run 2>&1)"
+active_status=$?
+check "active lock skips the run" "0" "$active_status"
+check_contains "active lock is reported" "already running" "$active_out"
+check "active lock is preserved" "yes" "$([[ -d "$lock_dir" ]] && echo yes || echo no)"
+
+printf '%s\n' "$(( $(date +%s) - 8 * 3600 ))" > "$lock_dir/started"
+stale_out="$(ALLEYUUP_LOCK_DIR="$lock_dir" ALLEYUUP_CONFIG="$PLAIN_CONFIG" "$ALLEYUUP" --only self-update --dry-run 2>&1)"
+stale_status=$?
+check "stale lock is taken over" "0" "$stale_status"
+check_contains "stale lock is reported" "Stale lock" "$stale_out"
+check "lock is released after the run" "no" "$([[ -d "$lock_dir" ]] && echo yes || echo no)"
+rm -rf "$lock_root"
+
 printf '\nCLI: init-config\n'
 init_conf="$(mktemp "${TMPDIR:-/tmp}/alleyuup-init.XXXXXX")"
 rm -f "$init_conf"
