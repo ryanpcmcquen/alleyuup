@@ -11,7 +11,7 @@ export HOMEBREW_NO_ASK=1
 export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1000}"
 export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-30}"
 
-ALLEYUUP_VERSION="1.5.0"
+ALLEYUUP_VERSION="1.5.1"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -1178,6 +1178,7 @@ update_code_repos() {
   CLEANUP_PATHS+=("$work_dir")
 
   local idx=0 dir
+  local pull_pids=()
   while IFS= read -r dir; do
     [[ -z "$dir" ]] && continue
     if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
@@ -1238,7 +1239,13 @@ update_code_repos() {
     if [[ -z "$skip_reason" ]]; then
       local jobs_cap="${ALLEYUUP_JOBS:-6}"
       [[ "$jobs_cap" =~ ^[0-9]+$ ]] && (( jobs_cap > 0 )) || jobs_cap=6
-      while (( $(jobs -pr | wc -l | tr -d ' ') >= jobs_cap )); do
+      local running=0 p
+      while :; do
+        running=0
+        for p in "${pull_pids[@]}"; do
+          kill -0 "$p" 2>/dev/null && running=$((running + 1))
+        done
+        (( running < jobs_cap )) && break
         sleep 0.05
       done
       (
@@ -1248,13 +1255,17 @@ update_code_repos() {
         export GIT_TERMINAL_PROMPT=0
         run_repo_pull "$dir" "$work_dir/$idx.result"
       ) >/dev/null 2>&1 &
+      pull_pids+=("$!")
     fi
 
     idx=$((idx + 1))
   done < <(find "$ALLEYUUP_CODE_DIR" -maxdepth 2 -type d -not -name '.git' | sort)
 
-  if (( idx > 0 )); then
-    wait
+  if (( ${#pull_pids[@]} > 0 )); then
+    local pull_pid
+    for pull_pid in "${pull_pids[@]}"; do
+      wait "$pull_pid" 2>/dev/null || true
+    done
   fi
 
   local i repo_name branch_label is_default_branch dirty_note skip_reason
@@ -1461,7 +1472,20 @@ update_mas() {
     printf "Would upgrade the Mac App Store apps listed above.\n"
     return 0
   fi
-  mas upgrade
+
+  local upgrade_out="" status=0
+  if upgrade_out="$(mas upgrade 2>&1)"; then
+    [[ -n "$upgrade_out" ]] && printf '%s\n' "$upgrade_out"
+    return 0
+  else
+    status=$?
+  fi
+  [[ -n "$upgrade_out" ]] && printf '%s\n' "$upgrade_out"
+  if [[ "$upgrade_out" == *"password is required"* ]] || [[ "$upgrade_out" == *"sudo"* ]]; then
+    printf "${YELLOW}⚠ Some App Store apps need sudo; run 'mas upgrade' manually.${RESET}\n" >&2
+    return 0
+  fi
+  return "$status"
 }
 
 sync_machine_repo() {

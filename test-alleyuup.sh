@@ -173,8 +173,47 @@ echo "rc=$?"
 check_contains "mas success returns 0" "rc=0" "$mas_ok_out"
 check_contains "mas lists outdated apps" "App 1.0 -> 1.1" "$mas_ok_out"
 
+mas_sudo_out="$(run_helper "" '
+mas() {
+  case "$1" in
+    outdated) printf "123456 App 1.0 -> 1.1\n" ;;
+    upgrade) printf "sudo: a password is required\n"; return 1 ;;
+  esac
+  return 0
+}
+update_mas
+echo "rc=$?"
+' 2>&1)"
+check_contains "mas sudo failure is not fatal" "rc=0" "$mas_sudo_out"
+check_contains "mas sudo failure explains itself" "need sudo" "$mas_sudo_out"
+
 watchdog_out="$(run_helper "" 'ALLEYUUP_MAX_RUNTIME=0; start_watchdog; [[ -z "$WATCHDOG_PID" ]] && echo "disabled"')"
 check_contains "watchdog is disabled when MAX_RUNTIME=0" "disabled" "$watchdog_out"
+
+printf '\nwatchdog does not block the repo step\n'
+wd_root="$(mktemp -d "${TMPDIR:-/tmp}/alleyuup-wd.XXXXXX")"
+mkdir -p "$wd_root/home/bin" "$wd_root/code/proj/.git" "$wd_root/lock-parent"
+cat > "$wd_root/home/bin/git" <<'GIT_STUB'
+#!/bin/sh
+case "$*" in
+  *"remote get-url origin"*) echo "https://example.com/repo.git"; exit 0 ;;
+  *"branch --show-current"*) echo main; exit 0 ;;
+  *"rev-parse --short HEAD"*) echo abc1234; exit 0 ;;
+  *"rev-list --count"*) echo 1; exit 0 ;;
+  *"pull"*) exit 0 ;;
+  *"fetch"*) exit 0 ;;
+esac
+exit 0
+GIT_STUB
+chmod +x "$wd_root/home/bin/git"
+wd_out="$(HOME="$wd_root/home" XDG_CONFIG_HOME="$wd_root/home/.config" \
+  ALLEYUUP_CONFIG="$PLAIN_CONFIG" ALLEYUUP_CODE_DIR="$wd_root/code" \
+  ALLEYUUP_LOCK_DIR="$wd_root/lock" ALLEYUUP_MAX_RUNTIME=3 \
+  "$ALLEYUUP" --only repos 2>&1)"
+wd_status=$?
+check "repo step completes with a watchdog running" "0" "$wd_status"
+check "watchdog did not fire" "0" "$(printf '%s\n' "$wd_out" | grep -c 'exceeded ALLEYUUP_MAX_RUNTIME' || true)"
+rm -rf "$wd_root"
 
 printf '\nrun_with_timeout\n'
 t_start="$(date +%s)"
