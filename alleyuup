@@ -11,7 +11,7 @@ export HOMEBREW_NO_ASK=1
 export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1000}"
 export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-30}"
 
-ALLEYUUP_VERSION="1.4.3"
+ALLEYUUP_VERSION="1.5.0"
 TOOLS_GIST_ID="alleyuup-repo"
 TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
 
@@ -37,6 +37,7 @@ ALLEYUUP_OVERRIDABLE_VARS=(
   ALLEYUUP_NPM ALLEYUUP_PNPM ALLEYUUP_RUSTUP ALLEYUUP_UV ALLEYUUP_PIPX
   ALLEYUUP_GH_EXT ALLEYUUP_CODE_REPOS ALLEYUUP_CODE_DIR ALLEYUUP_FLINT
   ALLEYUUP_SCRIBE ALLEYUUP_JOBS ALLEYUUP_NET_TIMEOUT ALLEYUUP_LOCK_MAX_HOURS
+  ALLEYUUP_MAX_RUNTIME ALLEYUUP_NPM_TIMEOUT
   ALLEYUUP_BREWFILE ALLEYUUP_REPO_SYNC ALLEYUUP_SHELL ALLEYUUP_MACOS
   ALLEYUUP_MACOS_MAJOR ALLEYUUP_MACOS_CHECK_HOURS ALLEYUUP_REPO_DIR
   ALLEYUUP_DRY_RUN ALLEYUUP_NOTIFY ALLEYUUP_LOG
@@ -80,6 +81,8 @@ unset _alleyuup_env_var
 : "${ALLEYUUP_JOBS:=6}"
 : "${ALLEYUUP_NET_TIMEOUT:=180}"
 : "${ALLEYUUP_LOCK_MAX_HOURS:=6}"
+: "${ALLEYUUP_MAX_RUNTIME:=0}"
+: "${ALLEYUUP_NPM_TIMEOUT:=900}"
 : "${ALLEYUUP_BREWFILE:=1}"
 : "${ALLEYUUP_REPO_SYNC:=1}"
 : "${ALLEYUUP_SHELL:=1}"
@@ -384,6 +387,8 @@ ALLEYUUP_CODE_DIR="$HOME/code"  # Directory to scan for git repositories
 ALLEYUUP_JOBS=6                 # Max parallel git pulls at once
 ALLEYUUP_NET_TIMEOUT=180        # Hard limit (seconds) for each network git operation
 ALLEYUUP_LOCK_MAX_HOURS=6       # Reclaim the run lock if it is older than this
+ALLEYUUP_MAX_RUNTIME=0          # Abort the whole run after this many seconds (0 = off)
+ALLEYUUP_NPM_TIMEOUT=900        # Hard limit (seconds) for a global npm update
 ALLEYUUP_FLINT=1                # Rebuild & install flint when its sources change
 ALLEYUUP_SCRIBE=1               # Rebuild & install scribe when its sources change
 ALLEYUUP_REPO_DIR=""            # Optional path to this machine's config/Brewfile git repo
@@ -723,13 +728,41 @@ run_with_timeout() {
 }
 
 cleanup() {
+  stop_watchdog
   release_lock
+  local p
+  for p in $(jobs -pr 2>/dev/null); do
+    kill "$p" 2>/dev/null || true
+  done
   if (( ${#CLEANUP_PATHS[@]} > 0 )); then
     rm -rf "${CLEANUP_PATHS[@]}" 2>/dev/null || true
   fi
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; exit 143' INT TERM
+
+WATCHDOG_PID=""
+
+# Kill the whole run if it exceeds ALLEYUUP_MAX_RUNTIME (used by scheduled runs)
+start_watchdog() {
+  local max="${ALLEYUUP_MAX_RUNTIME:-0}"
+  [[ "$max" =~ ^[0-9]+$ ]] || return 0
+  (( max > 0 )) || return 0
+  (
+    sleep "$max"
+    printf "\nalleyuup exceeded ALLEYUUP_MAX_RUNTIME (%ss); terminating.\n" "$max" >&2
+    kill -TERM "$$" 2>/dev/null
+  ) >/dev/null &
+  WATCHDOG_PID=$!
+}
+
+stop_watchdog() {
+  if [[ -n "${WATCHDOG_PID:-}" ]]; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    WATCHDOG_PID=""
+  fi
+}
 
 step_var_for() {
   case "$1" in
@@ -958,12 +991,19 @@ self_update_tools() {
 }
 
 update_homebrew() {
+  local rc=0
+
   if ! is_dry_run; then
-    brew update
+    brew update || rc=1
   fi
 
   if (( ALLEYUUP_BREW_FORMULA == 1 )); then
-    local formulas=()
+    local outdated_out=""
+    if ! outdated_out="$(brew outdated --formula --quiet 2>/dev/null)"; then
+      printf "${YELLOW}⚠ brew outdated (formula) failed${RESET}\n" >&2
+      rc=1
+    fi
+    local formulas=() f
     while IFS= read -r f; do
       [[ -z "$f" ]] && continue
       if (( ${#ALLEYUUP_BREW_IGNORE[@]} > 0 )) && in_array "$f" "${ALLEYUUP_BREW_IGNORE[@]}"; then
@@ -971,12 +1011,12 @@ update_homebrew() {
       else
         formulas+=("$f")
       fi
-    done < <(brew outdated --formula --quiet)
+    done <<<"$outdated_out"
     if (( ${#formulas[@]} > 0 )); then
       if is_dry_run; then
         printf "Would upgrade formulas: %s\n" "${formulas[*]}"
-      else
-        brew upgrade --formula --no-ask "${formulas[@]}"
+      elif ! brew upgrade --formula --no-ask "${formulas[@]}"; then
+        rc=1
       fi
     else
       printf "All Homebrew formulas are up to date.\n"
@@ -984,9 +1024,14 @@ update_homebrew() {
   fi
 
   if (( ALLEYUUP_BREW_CASK == 1 )); then
-    local casks=()
-    local out_cmd=(brew outdated --cask --quiet)
-    (( ALLEYUUP_BREW_GREEDY == 1 )) && out_cmd=(brew outdated --cask --greedy --quiet)
+    local casks_out=""
+    local outdated_cmd=(brew outdated --cask --quiet)
+    (( ALLEYUUP_BREW_GREEDY == 1 )) && outdated_cmd=(brew outdated --cask --greedy --quiet)
+    if ! casks_out="$("${outdated_cmd[@]}" 2>/dev/null)"; then
+      printf "${YELLOW}⚠ brew outdated (cask) failed${RESET}\n" >&2
+      rc=1
+    fi
+    local casks=() c
     while IFS= read -r c; do
       [[ -z "$c" ]] && continue
       if (( ${#ALLEYUUP_CASK_IGNORE[@]} > 0 )) && in_array "$c" "${ALLEYUUP_CASK_IGNORE[@]}"; then
@@ -994,14 +1039,14 @@ update_homebrew() {
       else
         casks+=("$c")
       fi
-    done < <("${out_cmd[@]}")
+    done <<<"$casks_out"
     if (( ${#casks[@]} > 0 )); then
       if is_dry_run; then
         printf "Would upgrade casks: %s\n" "${casks[*]}"
       elif (( ALLEYUUP_BREW_GREEDY == 1 )); then
-        brew upgrade --cask --greedy --no-ask "${casks[@]}"
+        brew upgrade --cask --greedy --no-ask "${casks[@]}" || rc=1
       else
-        brew upgrade --cask --no-ask "${casks[@]}"
+        brew upgrade --cask --no-ask "${casks[@]}" || rc=1
       fi
     else
       printf "All Homebrew casks are up to date.\n"
@@ -1012,9 +1057,11 @@ update_homebrew() {
     if is_dry_run; then
       printf "Would run: brew cleanup --prune=all\n"
     else
-      brew cleanup --prune=all
+      brew cleanup --prune=all || rc=1
     fi
   fi
+
+  return $rc
 }
 
 ensure_node_via_nvm() {
@@ -1074,7 +1121,8 @@ update_npm_globals() {
       printf "Would update global npm packages: %s\n" "${pkgs[*]}"
     else
       printf "Updating outdated global npm packages: %s\n" "${pkgs[*]}"
-      npm install -g --loglevel=error --no-audit --no-fund --yes "${pkgs[@]/%/@latest}"
+      run_with_timeout "${ALLEYUUP_NPM_TIMEOUT:-900}" npm install -g --loglevel=error --no-audit --no-fund --yes \
+        --fetch-timeout=60000 --fetch-retries=1 "${pkgs[@]/%/@latest}"
     fi
   else
     printf "All global npm packages are up to date.\n"
@@ -1399,8 +1447,11 @@ update_shell() {
 }
 
 update_mas() {
-  local out
-  out="$(mas outdated 2>/dev/null || true)"
+  local out=""
+  if ! out="$(mas outdated 2>/dev/null)"; then
+    printf "${YELLOW}⚠ mas outdated failed (signed in to the App Store?)${RESET}\n" >&2
+    return 1
+  fi
   if [[ -z "$out" ]]; then
     printf "All Mac App Store apps are up to date.\n"
     return 0
@@ -1653,6 +1704,7 @@ if ! acquire_lock; then
 fi
 
 start_logging
+start_watchdog
 
 # 0. Self-update alleyuup & dots from shared tools Gist (git repo or standalone curl)
 printf "${BOLD}alleyuup v%s${RESET}\n" "$(get_version_string)"

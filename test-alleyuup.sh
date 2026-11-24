@@ -137,6 +137,45 @@ rot_lines="$(run_helper "$rot_dir" 'rotate_log "$FIXTURE/big.log"; wc -l < "$FIX
 check "rotate_log keeps the last 500 lines" "500" "$rot_lines"
 rm -rf "$rot_dir"
 
+printf '\nbrew/mas failure reporting\n'
+brew_fail_out="$(run_helper "" '
+brew() {
+  case "$1" in
+    update) return 1 ;;
+    outdated) return 0 ;;
+    upgrade) return 0 ;;
+    cleanup) return 0 ;;
+  esac
+  return 0
+}
+update_homebrew
+echo "rc=$?"
+')"
+check_contains "brew update failure fails the step" "rc=1" "$brew_fail_out"
+
+brew_ok_out="$(run_helper "" 'brew() { return 0; }; update_homebrew; echo "rc=$?"')"
+check_contains "brew success returns 0" "rc=0" "$brew_ok_out"
+
+mas_fail_out="$(run_helper "" 'mas() { return 1; }; update_mas; echo "rc=$?"')"
+check_contains "mas outdated failure fails the step" "rc=1" "$mas_fail_out"
+
+mas_ok_out="$(run_helper "" '
+mas() {
+  case "$1" in
+    outdated) printf "123456 App 1.0 -> 1.1\n" ;;
+    upgrade) return 0 ;;
+  esac
+  return 0
+}
+update_mas
+echo "rc=$?"
+')"
+check_contains "mas success returns 0" "rc=0" "$mas_ok_out"
+check_contains "mas lists outdated apps" "App 1.0 -> 1.1" "$mas_ok_out"
+
+watchdog_out="$(run_helper "" 'ALLEYUUP_MAX_RUNTIME=0; start_watchdog; [[ -z "$WATCHDOG_PID" ]] && echo "disabled"')"
+check_contains "watchdog is disabled when MAX_RUNTIME=0" "disabled" "$watchdog_out"
+
 printf '\nrun_with_timeout\n'
 t_start="$(date +%s)"
 run_helper "" 'run_with_timeout 1 sleep 5' >/dev/null 2>&1
