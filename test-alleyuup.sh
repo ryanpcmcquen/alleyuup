@@ -197,6 +197,7 @@ cat > "$wd_root/home/bin/git" <<'GIT_STUB'
 #!/bin/sh
 case "$*" in
   *"remote get-url origin"*) echo "https://example.com/repo.git"; exit 0 ;;
+  *" remote"*) echo origin; exit 0 ;;
   *"branch --show-current"*) echo main; exit 0 ;;
   *"rev-parse --short HEAD"*) echo abc1234; exit 0 ;;
   *"rev-list --count"*) echo 1; exit 0 ;;
