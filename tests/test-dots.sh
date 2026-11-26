@@ -132,6 +132,7 @@ printf 'more\n' >> "$repo/gitconfig"
 sync_out="$("$DOTS" sync "test sync" 2>&1)"
 sync_status=$?
 check_exit "sync exits 0 on success" "0" "$sync_status"
+check_contains "sync reports success" "synced" "$sync_out"
 pushed=0
 if git -C "$sandbox/origin.git" rev-parse --verify -q main >/dev/null 2>&1; then
   pushed=1

@@ -13,7 +13,6 @@ export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-30}"
 
 ALLEYUUP_VERSION="1.6.0"
 TOOLS_REPO="ryanpcmcquen/alleyuup"
-TOOLS_REPO_SSH="git@github.com:${TOOLS_REPO}.git"
 TOOLS_REPO_HTTPS="https://github.com/${TOOLS_REPO}.git"
 TOOLS_RAW_BASE="https://raw.githubusercontent.com/${TOOLS_REPO}/main/bin"
 

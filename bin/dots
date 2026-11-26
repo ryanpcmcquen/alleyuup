@@ -305,7 +305,8 @@ link_one() {
     if cmp -s "$source_path" "$target"; then
       rm -f "$target"
     else
-      local backup="${target}.bak.$(date +%Y%m%d%H%M%S)"
+      local backup
+      backup="${target}.bak.$(date +%Y%m%d%H%M%S)"
       mv "$target" "$backup"
       printf "${YELLOW}Backed up existing %s to %s${RESET}\n" "$target" "$backup"
     fi
@@ -692,9 +693,9 @@ cmd_doctor() {
       target="$HOME/bin/$tool"
       source_path="$tools_dir/bin/$tool"
       if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$source_path" ]]; then
-        health_ok "~/bin/$tool linked"
+        health_ok "$HOME/bin/$tool linked"
       else
-        health_bad "~/bin/$tool is not linked (run 'dots link')"
+        health_bad "$HOME/bin/$tool is not linked (run 'dots link')"
       fi
     done
     if [[ -n "$(git -C "$tools_dir" status --porcelain 2>/dev/null)" ]]; then
@@ -793,9 +794,9 @@ cmd_doctor() {
 
   printf "\n${BLUE}==> Environment${RESET}\n"
   if [[ ":$PATH:" == *":$HOME/bin:"* ]]; then
-    health_ok "~/bin is on PATH"
+    health_ok "$HOME/bin is on PATH"
   else
-    health_warn "~/bin is not on PATH"
+    health_warn "$HOME/bin is not on PATH"
   fi
   if command -v alleyuup >/dev/null 2>&1; then
     health_ok "alleyuup: $(alleyuup --version 2>/dev/null | head -n 1)"
