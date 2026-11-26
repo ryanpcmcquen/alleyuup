@@ -1,5 +1,7 @@
 # alleyuup
 
+[![CI](https://github.com/ryanpcmcquen/alleyuup/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanpcmcquen/alleyuup/actions/workflows/ci.yml)
+
 A small, dependency-free macOS upgrade script (`alleyuup`) and a per-machine dotfiles manager (`dots`), designed to be safe to run unattended.
 
 - **`alleyuup`** upgrades Homebrew formulae and casks, Mac App Store apps, standalone CLIs, global language packages, local `~/code` repositories, and macOS point/security updates — skipping major macOS upgrades by default.
