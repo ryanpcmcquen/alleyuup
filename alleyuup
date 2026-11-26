@@ -265,12 +265,11 @@ configure_machine_repo() {
       printf "${RED}'gh' CLI is required to create a new Gist automatically.${RESET}\n" >&2
       exit 1
     fi
-    local host tmp_dir gist_url gist_id
-    host="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || echo "mac")"
+    local tmp_dir gist_url gist_id
     tmp_dir="$(mktemp -d)"
-    printf "# Local Configs (%s)\n" "$host" > "$tmp_dir/README.md"
-    printf "${BLUE}==> Creating new private Gist for %s...${RESET}\n" "$host"
-    gist_url="$(gh gist create "$tmp_dir/README.md" --desc "Local configs ($host)" | tail -n 1)"
+    printf "# Local Configs\n" > "$tmp_dir/README.md"
+    printf "${BLUE}==> Creating new private Gist...${RESET}\n"
+    gist_url="$(gh gist create "$tmp_dir/README.md" --desc "Local configs" | tail -n 1)"
     rm -rf "$tmp_dir"
     gist_id="${gist_url##*/}"
     target_dir="$HOME/code/$gist_id"
@@ -1549,10 +1548,8 @@ sync_machine_repo() {
     fi
 
     git -C "$machine_repo" add -A
-    local host
-    host="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || echo "mac")"
     if ! git -C "$machine_repo" diff --cached --quiet; then
-      git -C "$machine_repo" commit -m "alleyuup: sync configs & Brewfile ($host, $(date '+%Y-%m-%d %H:%M'))"
+      git -C "$machine_repo" commit -m "alleyuup: sync configs & Brewfile ($(date '+%Y-%m-%d %H:%M'))"
     else
       printf "No new config or Brewfile changes to commit in %s.\n" "$machine_repo"
     fi

@@ -107,11 +107,10 @@ load_mappings() {
 
 write_default_readme() {
   local file="$1"
-  local host="${2:-mac}"
   cat <<EOF > "$file"
-# Local Configs ($host)
+# Local Configs
 
-This private Gist tracks per-machine configurations and the \`Brewfile\` for **$host**, managed by \`dots\` and \`alleyuup\`.
+This private Gist tracks per-machine configurations and the \`Brewfile\`, managed by \`dots\` and \`alleyuup\`.
 
 ## Tracked Files
 - \`alleyuup.conf\` -> \`~/.config/alleyuup/config\` (per-machine toggles, package exclusions, and hooks for \`alleyuup\`)
@@ -169,14 +168,12 @@ configure_repo() {
       printf "${RED}'gh' CLI is required to create a new Gist automatically.${RESET}\n" >&2
       exit 1
     fi
-    local host
-    host="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || echo "mac")"
     local tmp_dir
     tmp_dir="$(mktemp -d)"
-    write_default_readme "$tmp_dir/README.md" "$host"
-    printf "${BLUE}==> Creating new private Gist for %s...${RESET}\n" "$host"
+    write_default_readme "$tmp_dir/README.md"
+    printf "${BLUE}==> Creating new private Gist...${RESET}\n"
     local gist_url
-    gist_url="$(gh gist create "$tmp_dir/README.md" --desc "Local configs ($host)" | tail -n 1)"
+    gist_url="$(gh gist create "$tmp_dir/README.md" --desc "Local configs" | tail -n 1)"
     rm -rf "$tmp_dir"
     local gist_id="${gist_url##*/}"
     target_dir="$HOME/code/$gist_id"
