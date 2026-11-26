@@ -11,7 +11,7 @@ export HOMEBREW_NO_ASK=1
 export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1000}"
 export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-30}"
 
-ALLEYUUP_VERSION="1.6.0"
+ALLEYUUP_VERSION="1.6.1"
 TOOLS_REPO="ryanpcmcquen/alleyuup"
 TOOLS_REPO_HTTPS="https://github.com/${TOOLS_REPO}.git"
 TOOLS_RAW_BASE="https://raw.githubusercontent.com/${TOOLS_REPO}/main/bin"

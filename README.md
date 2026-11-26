@@ -83,4 +83,4 @@ The tests are offline and sandboxed: `tests/test-alleyuup.sh` covers parsers, st
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+ISC — see [LICENSE.txt](LICENSE.txt).
