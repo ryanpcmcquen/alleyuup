@@ -135,11 +135,8 @@ This private Gist tracks per-machine configurations and the \`Brewfile\`, manage
 
 ## Quick Setup on a Machine
 \`\`\`sh
-mkdir -p ~/code ~/bin
-# 1. Clone the shared alleyuup & dots tools Gist:
-gh gist clone alleyuup-repo ~/code/alleyuup-repo
-ln -sfn ~/code/alleyuup-repo/dots ~/bin/dots
-ln -sfn ~/code/alleyuup-repo/alleyuup ~/bin/alleyuup
+# 1. Install alleyuup & dots:
+curl -fsSL https://raw.githubusercontent.com/ryanpcmcquen/alleyuup/main/install.sh | bash
 
 # 2. Point dots at this machine's config Gist (or run 'dots repo new') and link:
 dots repo <machine-gist-id>
