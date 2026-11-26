@@ -1,116 +1,84 @@
-# `alleyuup` & `dots` — Shared Tools Gist
+# alleyuup
 
-This private Gist (`alleyuup-repo`) holds the canonical, machine-independent **`alleyuup`** (local upgrade script) and **`dots`** (per-machine config Gist manager).
+A small, dependency-free macOS upgrade script (`alleyuup`) and a per-machine dotfiles manager (`dots`), designed to be safe to run unattended.
 
-Per-machine configs, `Brewfile`, and local `alleyuup` overrides (`alleyuup.conf` -> `~/.config/alleyuup/config`) live in each machine's own private Gist (for example, `example-machine-gist`).
+- **`alleyuup`** upgrades Homebrew formulae and casks, Mac App Store apps, standalone CLIs, global language packages, local `~/code` repositories, and macOS point/security updates — skipping major macOS upgrades by default.
+- **`dots`** keeps shell/editor configs and a `Brewfile` in a per-machine private Gist (symlinked into `$HOME`), and handles linking, syncing, health checks, and a weekly schedule.
 
----
+## Requirements
 
-## One-Line Install on Any Machine
+- macOS (Apple Silicon or Intel), Bash 3.2+
+- Homebrew (optional; steps are skipped when tools are missing)
+- `git`, and `gh` for the `dots repo new` flow
 
-```sh
-curl -fsSL https://gist.githubusercontent.com/ryanpcmcquen/alleyuup-repo/raw/install.sh | bash
-```
-
-Then to connect a machine's config Gist:
-```sh
-dots repo   # Enter existing machine Gist ID, path, or 'new'
-dots link   # Symlinks all machine configs
-```
-
-> **Switching from `alleyup` -> `alleyuup`**: On machines that had the older `alleyup` installed, remove the old symlink/config dir and re-run the installer:
-> ```sh
-> rm -rf ~/bin/alleyup ~/.config/alleyup
-> curl -fsSL https://gist.githubusercontent.com/ryanpcmcquen/alleyuup-repo/raw/install.sh | bash
-> ```
-
----
-
-## Customizing `alleyuup` Per Machine (`~/.config/alleyuup/config`)
-
-If a package or upgrade step is misbehaving on a specific machine, you don't need to fork `alleyuup`. Edit that machine's config:
+## Install
 
 ```sh
-alleyuup --config   # Opens ~/.config/alleyuup/config in $EDITOR
+curl -fsSL https://raw.githubusercontent.com/ryanpcmcquen/alleyuup/main/install.sh | bash
 ```
 
-Because `~/.config/alleyuup/config` is symlinked to `alleyuup.conf` in that machine's `dots` Gist, your overrides are tracked per-machine:
+This clones the repo to `~/code/alleyuup` and links `alleyuup`, `dots`, and their Fish/Zsh completions. Then connect this machine's config Gist:
 
-- **Disable any step** by setting its toggle to `0`:
-  ```sh
-  ALLEYUUP_MAS=0        # Skip Mac App Store updates on this machine
-  ALLEYUUP_MACOS=0      # Always skip macOS softwareupdate on this machine
-  ALLEYUUP_OPENCLAW=0   # Skip OpenClaw updates
-  ```
-- **Skip broken packages** while upgrading everything else:
-  ```sh
-  ALLEYUUP_BREW_IGNORE=("some-formula")
-  ALLEYUUP_CASK_IGNORE=("some-cask")
-  ALLEYUUP_NPM_IGNORE=("some-npm-pkg")
-  ```
-- **Add custom hooks or override a step completely** with bash functions:
-  ```sh
-  alleyuup_before() {
-    echo "Running custom pre-upgrade tasks..."
-  }
-
-  alleyuup_after() {
-    echo "Running custom post-upgrade tasks..."
-  }
-  ```
-
----
-
-## Commands Reference
-
-### `alleyuup`
 ```sh
-alleyuup                 # Self-update tools Gist, then run all enabled upgrades
-alleyuup --fast          # Skip macOS softwareupdate (alias: --no-macos)
-alleyuup --dry-run       # Show what would change, without changing anything
-alleyuup --only brew,mas # Run only the listed steps
-alleyuup --skip npm,uv   # Skip the listed steps
-alleyuup --no-self-update# Skip pulling latest alleyuup & dots from this Gist
-alleyuup --config        # Open ~/.config/alleyuup/config in $EDITOR
-alleyuup --init-config   # Create the config with defaults, no editor
-alleyuup --print-config  # Print active ~/.config/alleyuup/config
-alleyuup --print-steps   # Print resolved step toggles (debugging)
+dots repo    # existing Gist ID/URL, a local path, or 'new'
+dots link
 ```
 
-Step keys for `--only`/`--skip`:
-`self-update brew mas agy claude opencode openclaw nvm npm pnpm rustup uv pipx gh-ext repos flint scribe local-projects brewfile repo-sync shell macos`
+`dots link` symlinks every tracked config that exists on this machine and seeds an `alleyuup.conf` in the Gist if one is missing.
 
-Notes:
-- Precedence is `defaults < ~/.config/alleyuup/config < environment < CLI flags`, so `ALLEYUUP_BREW=0 alleyuup` works for a one-off run.
-- `flint` and `scribe` build independently; `local-projects` is shorthand for both (e.g. `alleyuup --skip scribe`).
-- Repository pulls run in parallel, capped by `ALLEYUUP_JOBS` (default `6`), and only repos whose local `HEAD` moved are reported as `updated`.
-- The macOS update scan is cached for `ALLEYUUP_MACOS_CHECK_HOURS` (default `24`) so `softwareupdate -l` is not paid on every run. Set it to `0` to always rescan.
-- A lock prevents overlapping runs, so two logins can't collide on Homebrew, npm, or the Gist; a lock older than `ALLEYUUP_LOCK_MAX_HOURS` (default `6`) is reclaimed so a hung run can't block future ones.
-- Network git operations are capped by `ALLEYUUP_NET_TIMEOUT` (default `180` seconds), with SSH `ConnectTimeout`/keepalives and git HTTP low-speed aborts, so a stalled remote cannot hang the run.
-- Scheduled runs also set `ALLEYUUP_MAX_RUNTIME=3600`, a whole-run watchdog that terminates the run (and releases the lock) if anything stalls; npm installs are capped by `ALLEYUUP_NPM_TIMEOUT` (default `900`).
-- Failures from `brew update`/`brew upgrade`, `brew outdated`, and `mas outdated` now fail the step instead of being masked by a later successful command.
-- Set `ALLEYUUP_LOG=1` (or a path) to tee output to `~/Library/Logs/alleyuup.log`; the log is rotated to the last 500 lines once it exceeds 5 MB.
-- `ALLEYUUP_NOTIFY=1` posts a macOS notification when a run ends with failed steps (used by the weekly job).
-- Tracked paths are checked against a sensitive deny-list (`~/.ssh`, `~/.gnupg`, `gh/hosts.yml`, `opencode/service.json`, …), so credentials cannot be committed by accident.
+## Usage
 
-### `dots`
 ```sh
-dots status             # Show symlink health & git status for both tools and machine Gists
-dots diff               # Show uncommitted changes in the machine Gist
-dots sync [msg]         # Refresh Brewfile, commit machine config changes, and push
-dots pull               # Pull latest changes for both tools and machine Gists & re-link
-dots link               # Symlink alleyuup, dots, and all machine config files
-dots add <file> [name]  # Track a new config file in the machine Gist
-dots clean [keep]       # Prune stale '.bak.<timestamp>' backups (keeps newest 3)
-dots doctor             # Health check: links, completions, repo, PATH, schedule
-dots restore            # Install Brewfile packages and link everything (brew bootstrap)
-dots restore --schedule # Same, plus install the weekly job
-dots lint               # bash -n + shellcheck (if installed) + both test suites
-dots schedule install   # Weekly launchd run (Sunday 03:00), logs to ~/Library/Logs
-dots schedule status    # Show schedule state
-dots schedule print     # Print the generated launchd plist (no changes)
-dots schedule remove    # Remove the schedule
-dots repo [target]      # View or change the machine's config Gist
+alleyuup                    # self-update, then run every enabled step
+alleyuup --fast             # skip macOS software updates (alias: --no-macos)
+alleyuup --dry-run          # show what would change, change nothing
+alleyuup --only brew,mas    # run only these steps
+alleyuup --skip npm,repos   # run everything except these
+alleyuup --config           # edit ~/.config/alleyuup/config
+alleyuup --print-steps      # show resolved step toggles
+alleyuup --check            # compare the local copy with the repo
 ```
 
-Shell completions for Fish and Zsh are installed by `install.sh` (and re-linked by `dots link`); the Zsh files land in `~/.local/share/zsh/site-functions`, so add that directory to `fpath` in `~/.zshrc` before `compinit`.
+Step keys: `self-update brew mas agy claude opencode openclaw nvm npm pnpm rustup uv pipx gh-ext repos flint scribe local-projects brewfile repo-sync shell macos`
+
+### Behavior worth knowing
+
+- **Per-machine config**: `~/.config/alleyuup/config` is symlinked to `alleyuup.conf` in the machine Gist. Any `ALLEYUUP_*` toggle can be set to `0`; lists like `ALLEYUUP_BREW_IGNORE`, `ALLEYUUP_CASK_IGNORE`, `ALLEYUUP_NPM_IGNORE`, and `ALLEYUUP_REPO_IGNORE` skip specific items. Hooks (`alleyuup_before`, `alleyuup_after`) and step overrides (`alleyuup_override_homebrew`, `alleyuup_override_npm`) can be defined there too.
+- **Precedence**: defaults < config file < environment < CLI flags.
+- **Safety**: a lock prevents overlapping runs; a lock older than `ALLEYUUP_LOCK_MAX_HOURS` (default 6) is reclaimed.
+- **Network bounds**: `ALLEYUUP_NET_TIMEOUT` (default 180s) caps each git operation; `ALLEYUUP_NPM_TIMEOUT` (default 900s) caps global npm updates. Optional `ALLEYUUP_MAX_RUNTIME` aborts an entire run.
+- **macOS updates**: only same-major updates are installed (`ALLEYUUP_MACOS_MAJOR=1` allows upgrades). Scans are cached for `ALLEYUUP_MACOS_CHECK_HOURS` (default 24).
+- **Secrets**: tracked paths are checked against a deny-list (`~/.ssh`, `~/.gnupg`, `gh/hosts.yml`, `opencode/service.json`, …); `dots add` refuses them.
+- **Logging**: `ALLEYUUP_LOG=1` (or a path) tees output to `~/Library/Logs/alleyuup.log`, rotated at 5 MB. `ALLEYUUP_NOTIFY=1` posts a macOS notification when a run fails.
+
+## `dots`
+
+```sh
+dots link                    # symlink scripts, completions, and configs
+dots status                  # symlink health and git status
+dots diff                    # uncommitted config changes
+dots sync [msg]              # refresh Brewfile, commit, pull --rebase, push
+dots pull                    # pull and re-link
+dots add <file> [name]       # track a file and link it
+dots clean [keep]            # prune stale .bak backups (keeps newest 3)
+dots doctor                  # links, completions, repo, PATH, run state, schedule
+dots restore [--schedule]    # brew bundle + link (+ weekly job) on a new machine
+dots lint                    # bash -n, shellcheck, both test suites
+dots schedule install|status|print|remove [hour]
+dots repo [target]           # view or change this machine's config repo
+dots path                    # print the config repo path
+```
+
+Expected doc layout: `bin/`, `completions/`, `tests/`.
+
+## Development
+
+```sh
+dots lint        # syntax + shellcheck (if installed) + tests
+```
+
+The tests are offline and sandboxed: `tests/test-alleyuup.sh` covers parsers, step filters, lock handling, timeouts, and failure reporting; `tests/test-dots.sh` runs in a throwaway `$HOME` with fake tools/config repos.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -11,9 +11,11 @@ export HOMEBREW_NO_ASK=1
 export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1000}"
 export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-30}"
 
-ALLEYUUP_VERSION="1.5.2"
-TOOLS_GIST_ID="alleyuup-repo"
-TOOLS_RAW_BASE="https://gist.githubusercontent.com/ryanpcmcquen/${TOOLS_GIST_ID}/raw"
+ALLEYUUP_VERSION="1.6.0"
+TOOLS_REPO="ryanpcmcquen/alleyuup"
+TOOLS_REPO_SSH="git@github.com:${TOOLS_REPO}.git"
+TOOLS_REPO_HTTPS="https://github.com/${TOOLS_REPO}.git"
+TOOLS_RAW_BASE="https://raw.githubusercontent.com/${TOOLS_REPO}/main/bin"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -194,6 +196,18 @@ resolve_self_repo() {
   done
   local candidate
   candidate="$(cd -P "$(dirname "$source")" && pwd)"
+
+  # bin/alleyuup lives inside the tools repo; ask git for the repo root
+  if command -v git >/dev/null 2>&1; then
+    local top=""
+    top="$(git -C "$candidate" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$top" ]] && [[ -d "$top/.git" ]]; then
+      printf "%s\n" "$top"
+      return 0
+    fi
+  fi
+
+  # Fallback for a flat layout (e.g. a Gist clone)
   if [[ -d "$candidate/.git" ]]; then
     printf "%s\n" "$candidate"
     return 0
@@ -939,7 +953,7 @@ self_update_tools() {
         before_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
         if ! run_with_timeout 120 git -C "$repo" pull --rebase --quiet origin "$branch" 2>/dev/null; then
           # Fallback to HTTPS pull if SSH isn't configured on this machine
-          run_with_timeout 120 git -C "$repo" pull --rebase --quiet "https://gist.github.com/${TOOLS_GIST_ID}.git" "$branch"
+          run_with_timeout 120 git -C "$repo" pull --rebase --quiet "$TOOLS_REPO_HTTPS" "$branch"
         fi
         after_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "")"
         if [[ -n "$before_sha" ]] && [[ "$before_sha" != "$after_sha" ]]; then

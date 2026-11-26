@@ -4,7 +4,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ALLEYUUP="$SCRIPT_DIR/alleyuup"
+ALLEYUUP="$SCRIPT_DIR/../bin/alleyuup"
 PLAIN_CONFIG="/dev/null"
 PASS=0
 FAIL=0

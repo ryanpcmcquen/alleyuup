@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: |
+          bash -n bin/alleyuup
+          bash -n bin/dots
+          bash -n install.sh
+          bash -n tests/test-alleyuup.sh
+          bash -n tests/test-dots.sh
+
+      - name: ShellCheck
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck -S warning bin/alleyuup bin/dots install.sh tests/*.sh
+          else
+            echo "shellcheck not available; skipping"
+          fi
+
+      - name: Tests
+        run: |
+          bash tests/test-alleyuup.sh
+          bash tests/test-dots.sh

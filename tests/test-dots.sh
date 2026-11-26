@@ -45,9 +45,9 @@ mkdir -p "$HOME/bin" "$HOME/.config"
 
 # Fake tools repo containing the real scripts
 tools="$sandbox/tools"
-mkdir -p "$tools"
-cp "$SRC_DIR/alleyuup" "$SRC_DIR/dots" "$tools/"
-chmod +x "$tools/alleyuup" "$tools/dots"
+mkdir -p "$tools/bin"
+cp "$SRC_DIR/../bin/alleyuup" "$SRC_DIR/../bin/dots" "$tools/bin/"
+chmod +x "$tools/bin/alleyuup" "$tools/bin/dots"
 (
   cd "$tools" || exit 1
   git init -q -b main
@@ -68,10 +68,10 @@ printf 'fake zprofile\n' > "$repo/zprofile"
   git -c user.email=test@example.com -c user.name=test commit -qm init
 )
 
-export PATH="$tools:$HOME/bin:$PATH"
+export PATH="$tools/bin:$HOME/bin:$PATH"
 export DOTFILES_GIST_DIR="$repo"
 
-DOTS="$tools/dots"
+DOTS="$tools/bin/dots"
 
 printf 'path\n'
 check "dots path prints the machine repo" "$repo" "$("$DOTS" path)"

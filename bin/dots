@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOTS_VERSION="1.5.2"
+DOTS_VERSION="1.6.0"
 
 BOLD="\033[1m"
 BLUE="\033[1;34m"
@@ -33,6 +33,18 @@ resolve_tools_dir() {
   done
   local candidate
   candidate="$(cd -P "$(dirname "$source")" && pwd)"
+
+  # bin/dots lives inside the tools repo; ask git for the repo root
+  if command -v git >/dev/null 2>&1; then
+    local top=""
+    top="$(git -C "$candidate" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$top" ]] && [[ -d "$top/.git" ]] && [[ "$top" != "$HOME" ]]; then
+      printf "%s\n" "$top"
+      return 0
+    fi
+  fi
+
+  # Fallback for a flat layout (e.g. a Gist clone)
   if [[ -d "$candidate/.git" ]] && [[ "$candidate" != "$HOME/bin" ]] && [[ "$candidate" != "$HOME/.local/bin" ]]; then
     printf "%s\n" "$candidate"
     return 0
@@ -48,8 +60,8 @@ resolve_alleyuup_bin() {
   [[ -n "$ALLEYUUP_BIN" ]] && return 0
   local tools_dir=""
   if tools_dir="$(resolve_tools_dir 2>/dev/null)"; then
-    if [[ -x "$tools_dir/alleyuup" ]]; then
-      ALLEYUUP_BIN="$tools_dir/alleyuup"
+    if [[ -x "$tools_dir/bin/alleyuup" ]]; then
+      ALLEYUUP_BIN="$tools_dir/bin/alleyuup"
     fi
   fi
   if [[ -z "$ALLEYUUP_BIN" ]] && command -v alleyuup >/dev/null 2>&1; then
@@ -307,20 +319,20 @@ cmd_link() {
   local tools_dir=""
   if tools_dir="$(resolve_tools_dir)"; then
     printf "${BLUE}==> Linking shared scripts from %s${RESET}\n" "$tools_dir"
-    link_one "$tools_dir/alleyuup" "$HOME/bin/alleyuup"
-    link_one "$tools_dir/dots" "$HOME/bin/dots"
+    link_one "$tools_dir/bin/alleyuup" "$HOME/bin/alleyuup"
+    link_one "$tools_dir/bin/dots" "$HOME/bin/dots"
 
     local fish_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
     local zsh_dir="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions"
-    if [[ -f "$tools_dir/alleyuup.fish" ]] && { command -v fish >/dev/null 2>&1 || [[ -d "$(dirname "$fish_dir")" ]]; }; then
+    if [[ -f "$tools_dir/completions/alleyuup.fish" ]] && { command -v fish >/dev/null 2>&1 || [[ -d "$(dirname "$fish_dir")" ]]; }; then
       mkdir -p "$fish_dir"
-      link_one "$tools_dir/alleyuup.fish" "$fish_dir/alleyuup.fish"
-      link_one "$tools_dir/dots.fish" "$fish_dir/dots.fish"
+      link_one "$tools_dir/completions/alleyuup.fish" "$fish_dir/alleyuup.fish"
+      link_one "$tools_dir/completions/dots.fish" "$fish_dir/dots.fish"
     fi
-    if [[ -f "$tools_dir/_alleyuup" ]] && { command -v zsh >/dev/null 2>&1 || [[ -d "$(dirname "$zsh_dir")" ]]; }; then
+    if [[ -f "$tools_dir/completions/_alleyuup" ]] && { command -v zsh >/dev/null 2>&1 || [[ -d "$(dirname "$zsh_dir")" ]]; }; then
       mkdir -p "$zsh_dir"
-      link_one "$tools_dir/_alleyuup" "$zsh_dir/_alleyuup"
-      link_one "$tools_dir/_dots" "$zsh_dir/_dots"
+      link_one "$tools_dir/completions/_alleyuup" "$zsh_dir/_alleyuup"
+      link_one "$tools_dir/completions/_dots" "$zsh_dir/_dots"
     fi
   fi
 
@@ -361,7 +373,7 @@ cmd_status() {
     printf "${BLUE}==> Shared Scripts (%s)${RESET}\n" "$tools_dir"
     for tool in alleyuup dots; do
       local target="$HOME/bin/$tool"
-      local source_path="$tools_dir/$tool"
+      local source_path="$tools_dir/bin/$tool"
       if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$source_path" ]]; then
         printf "${GREEN}✓${RESET} %-42s -> %s\n" "$target" "$source_path"
       else
@@ -504,10 +516,10 @@ cmd_lint() {
   fi
 
   printf "${BLUE}==> bash -n (syntax)${RESET}\n"
-  for f in "$tools_dir/alleyuup" "$tools_dir/dots" "$tools_dir/install.sh" "$tools_dir/test-alleyuup.sh"; do
+  for f in "$tools_dir/bin/alleyuup" "$tools_dir/bin/dots" "$tools_dir/install.sh" "$tools_dir/tests/test-alleyuup.sh" "$tools_dir/tests/test-dots.sh"; do
     [[ -f "$f" ]] || continue
     if bash -n "$f"; then
-      printf "  ✓ %s\n" "$(basename "$f")"
+      printf "  ✓ %s\n" "${f#"$tools_dir/"}"
     else
       failed=1
     fi
@@ -522,7 +534,7 @@ cmd_lint() {
 
   if command -v shellcheck >/dev/null 2>&1; then
     printf "\n${BLUE}==> shellcheck (warning+)${RESET}\n"
-    for f in "$tools_dir/alleyuup" "$tools_dir/dots" "$tools_dir/install.sh"; do
+    for f in "$tools_dir/bin/alleyuup" "$tools_dir/bin/dots" "$tools_dir/install.sh"; do
       [[ -f "$f" ]] || continue
       if shellcheck -S warning "$f"; then
         printf "  ✓ %s\n" "$(basename "$f")"
@@ -536,7 +548,7 @@ cmd_lint() {
 
   if [[ -d "$tools_dir" ]]; then
     local test_script
-    for test_script in "$tools_dir"/test-*.sh; do
+    for test_script in "$tools_dir"/tests/test-*.sh; do
       [[ -f "$test_script" ]] || continue
       printf "\n${BLUE}==> %s${RESET}\n" "$(basename "$test_script")"
       if ! "$test_script"; then
@@ -678,7 +690,7 @@ cmd_doctor() {
     local tool
     for tool in alleyuup dots; do
       target="$HOME/bin/$tool"
-      source_path="$tools_dir/$tool"
+      source_path="$tools_dir/bin/$tool"
       if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$source_path" ]]; then
         health_ok "~/bin/$tool linked"
       else
@@ -924,7 +936,7 @@ cmd_add() {
   local tools_dir=""
   local dots_script=""
   if tools_dir="$(resolve_tools_dir)"; then
-    dots_script="$tools_dir/dots"
+    dots_script="$tools_dir/bin/dots"
   fi
   local mapping_entry="${repo_name}:${abs_target/#$HOME/\$HOME}"
   if [[ -n "$dots_script" ]] && [[ -f "$dots_script" ]] && ! grep -Fq "\"$mapping_entry\"" "$dots_script"; then
